@@ -548,6 +548,39 @@
   cursor: not-allowed;
 }
 
+/* Блокировка полей ввода (Замочки) */
+.input-with-lock {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.input-with-lock input {
+  flex: 1;
+}
+
+.btn-lock {
+  background: #1a1a3e;
+  border: 1px solid #2a2a4a;
+  border-radius: 4px;
+  padding: 5px 8px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #888;
+  transition: all 0.2s;
+}
+
+.btn-lock:hover {
+  background: #2a2a4a;
+  border-color: #4a90d9;
+}
+
+.btn-lock.locked {
+  background: rgba(255, 170, 0, 0.15);
+  border-color: #ffaa00;
+  color: #ffaa00;
+}
+
 /* Скроллбар */
 .toolbar::-webkit-scrollbar { width: 5px; }
 .toolbar::-webkit-scrollbar-track { background: #111127; }

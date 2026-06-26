@@ -63,12 +63,21 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
 
   tool: 'line' | 'arc' = 'line';
 
+  // ПАРАМЕТРЫ ЛИНИИ
   lineLength = 100;
   lineAngle = 0;
-
+  
+  // ПАРАМЕТРЫ ДУГИ
   arcRadius = 20; 
   arcAngle = 90;  
   arcDirection: 'left' | 'right' = 'left';
+
+  // ЗАМОЧКИ
+  lockLineLength = false;
+  lockLineAngle = false;
+  lockArcRadius = false;
+  lockArcAngle = false;
+  lockArcDirection = false;
 
   selectedSegment: Segment | null = null;
 
@@ -119,7 +128,6 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
     if (e.key === 'Escape') { this.cancelDrawing(); return; }
     if (e.key === 'F8') { e.preventDefault(); this.orthoMode = !this.orthoMode; this.draw(); return; }
     
-    // ДОБАВЛЕНО: Быстрое создание по нажатию Enter
     if (e.key === 'Enter' && this.currentPoint && !isInput) {
       e.preventDefault();
       this.createSegmentFromParams();
@@ -127,8 +135,8 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
 
     if (!isInput) {
       const k = e.key.toLowerCase();
-      if (k === 'l') { this.tool = 'line'; this.draw(); return; }
-      if (k === 'a') { this.tool = 'arc'; this.draw(); return; }
+      if (k === 'l') { this.setTool('line'); return; }
+      if (k === 'a') { this.setTool('arc'); return; }
       if (k === 'delete' && this.selectedSegment) { this.deleteSelected(); return; }
     }
   };
@@ -195,41 +203,75 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
     this.currentSnap = this.findSnap(px, py);
     this.snappedCursor = this.currentSnap ? { ...this.currentSnap.point } : this.snapToGrid(this.cursorWorld);
 
-    // =========================================================
-    // НОВАЯ NX ЛОГИКА: Автоматический расчет по положению мыши
-    // =========================================================
     if (this.currentPoint) {
       const dx = this.snappedCursor.x - this.currentPoint.x;
       const dy = this.snappedCursor.y - this.currentPoint.y;
       const dist = Math.hypot(dx, dy);
 
       if (this.tool === 'line' && dist > 0.1) {
-        // Динамический расчет длины и угла для линии
-        this.lineLength = Math.round(dist * 100) / 100;
-        let ang = Math.atan2(dy, dx) * 180 / Math.PI;
-        if (ang < 0) ang += 360;
-        this.lineAngle = Math.round(ang * 100) / 100;
+        if (!this.lockLineLength) {
+          this.lineLength = Math.round(dist * 100) / 100;
+        }
+        if (!this.lockLineAngle) {
+          let ang = Math.atan2(dy, dx) * 180 / Math.PI;
+          if (ang < 0) ang += 360;
+          this.lineAngle = Math.round(ang * 100) / 100;
+        }
         
       } else if (this.tool === 'arc' && dist > 0.1) {
-        // Динамический расчет дуги по хорде к курсору (Сохраняем касательность)
         const chordAngle = Math.atan2(dy, dx);
         const tangentRad = this.currentTangent * Math.PI / 180;
         
         let alpha = chordAngle - tangentRad;
         while (alpha > Math.PI) alpha -= 2 * Math.PI;
-        while (alpha < -Math.PI) alpha += 2 * Math.PI;
-        
-        // Рисуем дугу только если курсор не лежит ровно на линии касательной
-        if (Math.abs(alpha) > 0.01 && Math.abs(Math.abs(alpha) - Math.PI) > 0.01) {
-          this.arcMode = 'angle';
+        while (alpha <= -Math.PI) alpha += 2 * Math.PI;
+
+        // Защита от бесконечного радиуса
+        if (Math.abs(alpha) < 0.05 || Math.abs(Math.abs(alpha) - Math.PI) < 0.05) {
+           this.draw();
+           return; 
+        }
+
+        // КАРТЕЗИАНСКИЙ МАППИНГ: alpha > 0 — это левый поворот (CCW) в декартовой системе Y-up
+        if (!this.lockArcDirection) {
+           this.arcDirection = alpha > 0 ? 'left' : 'right';
+        }
+
+        const isLeft = this.arcDirection === 'left';
+
+        if (!this.lockArcRadius && !this.lockArcAngle) {
+          const R = Math.abs(dist / (2 * Math.sin(alpha)));
+          if (R < 10000) { 
+            this.arcRadius = Math.round(R * 100) / 100;
+            const sweepRad = 2 * Math.abs(alpha);
+            
+            if (this.arcMode === 'angle') {
+              this.arcAngle = Math.round((sweepRad * 180 / Math.PI) * 100) / 100;
+            } else {
+              this.arcArcLength = Math.round(this.arcRadius * sweepRad * 100) / 100;
+            }
+          }
+        } 
+        else if (this.lockArcRadius && !this.lockArcAngle) {
+          let safeDist = Math.min(dist, this.arcRadius * 2);
+          let sweepRad = 2 * Math.asin(safeDist / (2 * this.arcRadius));
           
-          const R = dist / (2 * Math.sin(Math.abs(alpha)));
-          this.arcRadius = Math.round(R * 100) / 100;
-          
-          const sweepRad = 2 * Math.abs(alpha);
-          this.arcAngle = Math.round((sweepRad * 180 / Math.PI) * 100) / 100;
-          
-          this.arcDirection = alpha > 0 ? 'left' : 'right';
+          if ((alpha > 0 && !isLeft) || (alpha < 0 && isLeft)) {
+             sweepRad = 2 * Math.PI - sweepRad;
+          }
+
+          if (this.arcMode === 'angle') {
+            this.arcAngle = Math.round((sweepRad * 180 / Math.PI) * 100) / 100;
+          } else {
+            this.arcArcLength = Math.round(this.arcRadius * sweepRad * 100) / 100;
+          }
+        }
+        else if (!this.lockArcRadius && this.lockArcAngle) {
+          let sweepRad = this.arcMode === 'angle' ? this.arcAngle * Math.PI / 180 : (this.arcArcLength / this.arcRadius);
+          if (sweepRad > 0) {
+             const R = dist / (2 * Math.sin(sweepRad / 2));
+             this.arcRadius = Math.round(R * 100) / 100;
+          }
         }
       }
     }
@@ -296,7 +338,6 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
     return null;
   }
 
-  // === ОБНОВЛЕННАЯ ЛОГИКА КЛИКА: ИНТЕРАКТИВНОЕ ПОСТРОЕНИЕ ===
   private handleCanvasClick(px: number, py: number): void {
     const pos = this.currentSnap ? { ...this.currentSnap.point } : this.snappedCursor;
 
@@ -306,8 +347,6 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
       this.currentTangent = 0;
       this.draw();
     } else {
-      // Клик по холсту теперь СОЗДАЕТ сегмент, как в CAD (NX)
-      // Так как onMouseMove уже обновил все нужные параметры, нам нужно лишь вызвать метод создания
       this.createSegmentFromParams();
     }
   }
@@ -323,18 +362,17 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
 
   createSegmentFromParams(): void {
     if (!this.currentPoint) return;
-    
-    // Сохраняем состояние ДО создания элемента (для Ctrl+Z)
     this.pushHistory();
 
     if (this.tool === 'line') {
-      if (this.lineLength < 0.1) return; // Игнорируем нулевые клики
+      if (this.lineLength < 0.1) return; 
       this.createLineFromCurrentPoint();
     } else {
-      if (this.arcRadius < 0.1) return; // Игнорируем нулевые клики
+      if (this.arcRadius < 0.1) return;
       this.createArcFromCurrentPoint();
     }
     
+    this.resetLocks();
     this.draw();
   }
 
@@ -373,7 +411,8 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
     const turnRad = turnAngleDeg * Math.PI / 180;
     const tangentRad = this.currentTangent * Math.PI / 180;
 
-    const dir = this.arcDirection === 'left' ? 1 : -1;
+    // ВАЖНЫЙ ФИКС: Лево CCW — это всегда +1 в классической математике!
+    const dir = this.arcDirection === 'left' ? 1 : -1; 
 
     const normalRad = tangentRad + dir * (Math.PI / 2);
     const centerX = this.currentPoint!.x + R * Math.cos(normalRad);
@@ -416,6 +455,7 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
     this.currentPoint = null;
     this.currentTangent = 0;
     this.selectedSegment = null;
+    this.resetLocks();
     this.draw();
   }
 
@@ -482,6 +522,28 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
     } else {
       return seg.sweepAngle;
     }
+  }
+
+  resetLocks(): void {
+    this.lockLineLength = false;
+    this.lockLineAngle = false;
+    this.lockArcRadius = false;
+    this.lockArcAngle = false;
+    this.lockArcDirection = false;
+  }
+
+  onManualInput(field: string): void {
+    if (field === 'lineLength') this.lockLineLength = true;
+    if (field === 'lineAngle') this.lockLineAngle = true;
+    if (field === 'arcRadius') this.lockArcRadius = true;
+    if (field === 'arcAngle') this.lockArcAngle = true;
+    this.draw();
+  }
+
+  setDirection(dir: 'left'|'right'): void {
+    this.arcDirection = dir;
+    this.lockArcDirection = true; 
+    this.draw();
   }
 
   private draw(): void {
@@ -570,6 +632,7 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
         const c = this.worldToScreen(seg.center.x, seg.center.y);
         const r = seg.radius * this.camera.zoom;
 
+        // ВАЖНО: Рисуем дугу, инвертируя углы для Canvas (так как Y идет вниз)
         this.ctx.beginPath();
         this.ctx.arc(c.x, c.y, r, -seg.startAngle, -seg.endAngle, seg.ccw);
         this.ctx.stroke();
@@ -591,20 +654,17 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
         this.ctx.arc(c.x, c.y, 3, 0, Math.PI * 2);
         this.ctx.fill();
         this.ctx.strokeStyle = '#fff';
-        this.ctx.lineWidth = 1;
+        this.ctx.lineWidth = 1.5;
         this.ctx.stroke();
 
-        const angleDiff = seg.ccw
-          ? (seg.endAngle - seg.startAngle)
-          : (seg.startAngle - seg.endAngle);
-        const midAng = seg.ccw
-          ? seg.startAngle + angleDiff / 2
-          : seg.startAngle - angleDiff / 2;
+        const dir = seg.ccw ? 1 : -1;
+        const sweepRad = seg.sweepAngle * Math.PI / 180;
+        const midAng = seg.startAngle + dir * (sweepRad / 2);
           
         const lx = c.x + Math.cos(-midAng) * (r + 25);
         const ly = c.y + Math.sin(-midAng) * (r + 25);
 
-        const angleDeg = Math.abs(angleDiff) * 180 / Math.PI;
+        const angleDeg = Math.abs(seg.sweepAngle);
         this.ctx.fillStyle = '#ffaa00';
         this.ctx.font = 'bold 12px monospace';
         this.ctx.textAlign = 'center';
@@ -638,7 +698,7 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
     const len = 40;
     const rad = this.currentTangent * Math.PI / 180;
     const ex = p.x + Math.cos(rad) * len;
-    const ey = p.y - Math.sin(rad) * len;
+    const ey = p.y - Math.sin(rad) * len; // Маппинг Y-flipped для Canvas
 
     this.ctx.strokeStyle = 'rgba(76, 175, 80, 0.6)';
     this.ctx.lineWidth = 1.5;
@@ -703,6 +763,7 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
       let turnAngleDeg = this.arcMode === 'angle' ? this.arcAngle : (this.arcArcLength / R) * (180 / Math.PI);
       const turnRad = turnAngleDeg * Math.PI / 180;
       const tangentRad = this.currentTangent * Math.PI / 180;
+      
       const dir = this.arcDirection === 'left' ? 1 : -1;
       
       const normalRad = tangentRad + dir * (Math.PI / 2);
@@ -733,6 +794,7 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
       this.ctx.lineWidth = 2.5;
       this.ctx.setLineDash([6, 4]);
       
+      // ВАЖНЫЙ МАППИНГ: Инвертируем углы для Canvas (так как Y в Canvas идет вниз)
       this.ctx.beginPath();
       this.ctx.arc(c.x, c.y, r, -startAngle, -endAngle, this.arcDirection === 'left');
       this.ctx.stroke();
@@ -753,9 +815,7 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
       this.ctx.arc(c.x, c.y, 3, 0, Math.PI * 2);
       this.ctx.fill();
 
-      const midAng = this.arcDirection === 'left'
-        ? startAngle + turnRad / 2
-        : startAngle - turnRad / 2;
+      const midAng = startAngle + dir * (turnRad / 2);
         
       const lx = c.x + Math.cos(-midAng) * (r + 25);
       const ly = c.y + Math.sin(-midAng) * (r + 25);
@@ -825,6 +885,7 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
 
   setTool(t: 'line' | 'arc'): void {
     this.tool = t;
+    this.resetLocks(); 
     this.draw();
   }
 
@@ -849,6 +910,7 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
     this.currentTangent = 0;
     this.selectedSegment = null;
     this.nextId = 1;
+    this.resetLocks();
     this.draw();
   }
 
@@ -870,10 +932,6 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   onSave(): void {
-    if (this.segments.length === 0) {
-      alert('Добавьте хотя бы один сегмент');
-      return;
-    }
     const result: PathSegment[] = [];
     for (const seg of this.segments) {
       if (seg.type === 'line') {
@@ -913,7 +971,7 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
         end = {
           id: this.nextId++,
           x: curX + Math.cos(rad) * seg.value,
-          y: curY + Math.sin(rad) * seg.value
+          y: curY + Math.sin(rad) * seg.value 
         };
         this.points.push(end);
         this.segments.push({ id: this.nextId++, type: 'line', startId: last.id, endId: end.id });
@@ -926,7 +984,7 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
         const arcLen = R * turnRad;
         
         const ccw = seg.direction === 'left';
-        const dir = ccw ? 1 : -1;
+        const dir = ccw ? 1 : -1; 
         const tangentRad = curAng * Math.PI / 180;
 
         const normalRad = tangentRad + dir * (Math.PI / 2);
@@ -984,9 +1042,9 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
       return `Кликните на холст, чтобы задать начальную точку траектории`;
     }
     if (this.tool === 'line') {
-      return `ЛИНИЯ: кликните на холст для создания отрезка к мыши`;
+      return `ЛИНИЯ: Задайте размеры или кликните. (Enter - создать)`;
     } else {
-      return `ДУГА: кликните на холст для создания касательной дуги`;
+      return `ДУГА: Настройте Радиус/Угол (🔓/🔒) или кликните.`;
     }
   }
 }
