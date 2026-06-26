@@ -1,0 +1,441 @@
+:host {
+  --primary: #4a90d9;
+  --primary-dark: #2d5a8a;
+  --accent: #e94560;
+  --bg-dark: #0f0f23;
+  --bg-card: #16213e;
+  --bg-input: #1a1a3e;
+  --text: #e0e0e0;
+  --text-muted: #888;
+  --border: #2a2a4a;
+  --success: #4caf50;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+.app-container {
+  min-height: 100vh;
+  background: var(--bg-dark);
+  color: var(--text);
+  font-family: 'Segoe UI', Tahoma, sans-serif;
+  padding: 20px;
+}
+
+/* === Заголовок === */
+.app-header {
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.app-header h1 {
+  font-size: 24px;
+  color: var(--primary);
+}
+
+.app-header .subtitle {
+  color: var(--text-muted);
+  font-size: 14px;
+  margin-top: 4px;
+}
+
+/* === Сетка === */
+.main-content {
+  display: grid;
+  grid-template-columns: 380px 1fr;
+  gap: 20px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+/* === Карточки === */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+.card h3 {
+  font-size: 14px;
+  margin-bottom: 12px;
+  color: var(--primary);
+}
+
+/* === Формы === */
+.form-group {
+  margin-bottom: 12px;
+}
+
+.form-group label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.form-group input {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 14px;
+  transition: border-color 0.2s;
+}
+
+.form-group input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.form-group .hint {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* === Прочее === */
+.area-display {
+  padding: 8px;
+  background: var(--bg-input);
+  border-radius: 6px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--primary);
+}
+
+.tab-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.tab-buttons button {
+  flex: 1;
+  padding: 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.2s;
+}
+
+.tab-buttons button.active {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
+}
+
+.preset-buttons {
+  margin-bottom: 12px;
+}
+
+.preset-buttons small {
+  display: block;
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.preset-btn {
+  padding: 4px 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+  transition: all 0.2s;
+}
+
+.preset-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.cutting-speed-info {
+  padding: 8px;
+  background: rgba(74, 144, 217, 0.1);
+  border-radius: 6px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  text-align: center;
+}
+
+.formula-display {
+  margin-top: 12px;
+  padding: 12px;
+  background: var(--bg-input);
+  border-radius: 6px;
+}
+
+.formula-line {
+  font-size: 12px;
+  margin-bottom: 6px;
+  font-family: monospace;
+}
+
+.formula-line:last-child {
+  margin-bottom: 0;
+}
+
+/* === Кнопка расчёта === */
+.calculate-btn {
+  width: 100%;
+  padding: 14px;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-size: 16px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-bottom: 12px;
+}
+
+.calculate-btn:hover {
+  background: #ff5a75;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(233, 69, 96, 0.3);
+}
+
+/* === Результаты === */
+.results-panel {
+  min-width: 0;
+}
+
+.result-steps {
+  margin-bottom: 16px;
+}
+
+.step {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.step:last-child {
+  border-bottom: none;
+}
+
+.step-number {
+  width: 24px;
+  height: 24px;
+  background: var(--primary-dark);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: bold;
+  flex-shrink: 0;
+}
+
+.step-content {
+  flex: 1;
+}
+
+.step-content strong {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.step-content p {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: monospace;
+  margin-top: 2px;
+}
+
+.step.highlight {
+  background: rgba(76, 175, 80, 0.1);
+  border-radius: 8px;
+  border: 1px solid rgba(76, 175, 80, 0.3);
+}
+
+.step.highlight .step-number {
+  background: var(--success);
+}
+
+.step.highlight .big-result {
+  font-size: 14px;
+  color: var(--success);
+  font-weight: bold;
+}
+
+.summary {
+  padding: 12px;
+  background: var(--bg-input);
+  border-radius: 8px;
+}
+
+.summary-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  font-size: 13px;
+}
+
+.summary-row.total {
+  border-top: 2px solid var(--primary);
+  margin-top: 8px;
+  padding-top: 10px;
+  font-size: 16px;
+  color: var(--success);
+}
+
+.empty-state {
+  text-align: center;
+  padding: 40px 20px;
+}
+
+.empty-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+}
+
+.empty-state h3 {
+  color: var(--text-muted);
+  font-size: 16px;
+  margin-bottom: 8px;
+}
+
+.empty-state p {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* === Адаптив === */
+@media (max-width: 900px) {
+  .main-content {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Массовое производство чекбокс */
+.mass-production-card {
+  background: linear-gradient(135deg, #16213e 0%, #1a3a5e 100%);
+}
+
+.mass-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  padding: 8px;
+}
+
+.mass-checkbox input {
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  accent-color: #e94560;
+}
+
+.checkbox-label strong {
+  display: block;
+  color: #e94560;
+  font-size: 14px;
+}
+
+.checkbox-label small {
+  color: #aaa;
+  font-size: 11px;
+}
+
+/* Кнопка открытия редактора */
+.btn-open-editor {
+  width: 100%;
+  padding: 12px;
+  background: linear-gradient(135deg, #4a90d9, #2d5a8a);
+  border: none;
+  border-radius: 6px;
+  color: white;
+  font-weight: bold;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s;
+}
+
+.btn-open-editor:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(74, 144, 217, 0.3);
+}
+
+/* Превью траектории */
+.path-summary {
+  background: #1a1a3e;
+  padding: 10px;
+  border-radius: 6px;
+  margin-bottom: 10px;
+}
+
+.path-summary .summary-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  padding: 3px 0;
+  color: #aaa;
+}
+
+.path-summary .summary-row strong {
+  color: #4caf50;
+}
+
+.segments-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #2a2a4a;
+}
+
+.segment-badge {
+  background: #2a2a4a;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: #e0e0e0;
+}
+
+/* Бейджи типа производства */
+.mass-badge {
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  margin-bottom: 12px;
+  background: rgba(233, 69, 96, 0.1);
+  border: 1px solid rgba(233, 69, 96, 0.3);
+  color: #e94560;
+  text-align: center;
+}
+
+.mass-badge.single {
+  background: rgba(74, 144, 217, 0.1);
+  border-color: rgba(74, 144, 217, 0.3);
+  color: #4a90d9;
+}
+
+.raw-time {
+  font-size: 11px;
+  color: #888 !important;
+  margin-bottom: 4px !important;
+}

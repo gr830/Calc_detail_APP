@@ -1,39 +1,37 @@
 import { Injectable } from '@angular/core';
-import { CalculationParams, CalculationResult } from '../models/calculation.model';
+import { CalculationParams, CalculationResult, PathSegment } from '../models/calculation.model';
 
-@Injectable({
-  providedIn: 'root'
-})
+@Injectable({ providedIn: 'root' })
 export class CalculationService {
 
   calculate(params: CalculationParams): CalculationResult {
-    // 1. Режущая часть фрезы (шаг между проходами)
-    // Берём 25% от диаметра фрезы
+    // Шаг фрезы (режущая часть)
     const stepOver = params.cutterDiameter * (params.stepOverPercent / 100);
-
-    // 2. Количество проходов по ширине
-    // Делим ширину на шаг и округляем вверх
     const passesAcross = Math.ceil(params.width / stepOver);
 
-    // 3. Общая длина обработки (L p.x)
-    // Умножаем количество проходов на длину
-    // Учитываем количество проходов по глубине
-    const rawLength = passesAcross * params.length * params.depthPasses;
-    // Округляем вверх до ближайшего 10
+    // Длина пути в зависимости от режима
+    let pathLength: number;
+    if (params.inputMode === 'rectangle') {
+      pathLength = params.length;
+    } else {
+      pathLength = this.calculatePathLength(params.pathSegments);
+    }
+
+    // Общая длина обработки L p.x
+    const rawLength = passesAcross * pathLength * params.depthPasses;
     const totalLength = Math.ceil(rawLength / 10) * 10;
 
-    // 4. Подача на оборот (S об)
+    // Подача
     const feedPerRevolution = params.feedPerTooth * params.numberOfTeeth;
-
-    // 5. Подача в минуту (S мин)
-    // S мин = n * S об
     const feedRate = params.spindleSpeed * feedPerRevolution;
 
-    // 6. Оперативное время (То)
-    // То = L p.x / S мин
-    const operationalTime = feedRate > 0 ? totalLength / feedRate : 0;
+    // Время оперативное (сырое)
+    const rawOperationalTime = feedRate > 0 ? totalLength / feedRate : 0;
 
-    // 7. Общее время
+    // Округление по типу производства
+    const roundingStep = params.isMassProduction ? 0.1 : 0.05;
+    const operationalTime = Math.ceil(rawOperationalTime / roundingStep) * roundingStep;
+
     const totalTime = operationalTime + params.setupTime;
 
     return {
@@ -43,7 +41,21 @@ export class CalculationService {
       feedPerRevolution: Math.round(feedPerRevolution * 1000) / 1000,
       feedRate: Math.round(feedRate * 100) / 100,
       operationalTime: Math.round(operationalTime * 1000) / 1000,
-      totalTime: Math.round(totalTime * 1000) / 1000
+      operationalTimeRaw: Math.round(rawOperationalTime * 10000) / 10000,
+      totalTime: Math.round(totalTime * 1000) / 1000,
+      roundingStep
     };
+  }
+
+  calculatePathLength(segments: PathSegment[]): number {
+    return segments.reduce((total, seg) => {
+      if (seg.type === 'line') {
+        return total + seg.value;
+      } else {
+        // Длина дуги = (угол / 360) × 2πR
+        const arcLength = (seg.angle / 360) * 2 * Math.PI * seg.value;
+        return total + arcLength;
+      }
+    }, 0);
   }
 }

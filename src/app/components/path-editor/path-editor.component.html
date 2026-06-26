@@ -1,0 +1,107 @@
+<div class="modal-overlay" (keydown)="null">
+  <div class="modal-header">
+    <h2>✏️ Редактор траектории</h2>
+    <div class="header-actions">
+      <span class="info">Ширина обработки: {{ width }} мм</span>
+      <span class="info total-length">Общая длина: {{ totalPathLength | number:'1.2-2' }} мм</span>
+      <button class="btn-close" (click)="onCancel()">✕</button>
+    </div>
+  </div>
+
+  <div class="modal-body">
+    <!-- Левая панель: управление сегментами -->
+    <aside class="control-panel">
+      
+      <!-- Добавление сегмента -->
+      <div class="panel-card">
+        <h3>➕ Добавить сегмент</h3>
+        
+        <div class="form-row">
+          <label>Тип:</label>
+          <div class="segment-type-buttons">
+            <button 
+              [class.active]="newType === 'line'"
+              (click)="newType = 'line'">
+              📏 Прямая
+            </button>
+            <button 
+              [class.active]="newType === 'arc'"
+              (click)="newType = 'arc'">
+              🔄 Дуга
+            </button>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <label>{{ newType === 'line' ? 'Длина (мм):' : 'Радиус (мм):' }}</label>
+          <input type="number" [(ngModel)]="newValue" min="1">
+        </div>
+
+        <div class="form-row" *ngIf="newType === 'arc'">
+          <label>Угол (градусы):</label>
+          <input type="number" [(ngModel)]="newAngle" min="1" max="360">
+        </div>
+
+        <div class="form-row" *ngIf="newType === 'arc'">
+          <label>Направление:</label>
+          <div class="segment-type-buttons">
+            <button [class.active]="newDirection === 'left'" (click)="newDirection = 'left'">⬅ Налево</button>
+            <button [class.active]="newDirection === 'right'" (click)="newDirection = 'right'">➡ Направо</button>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="preview-info">
+            Длина сегмента: <strong>{{ (newType === 'line' ? newValue : (newAngle / 360) * 2 * 3.14159 * newValue) | number:'1.2-2' }} мм</strong>
+          </div>
+        </div>
+
+        <button class="btn-add" (click)="addSegment()">+ Добавить</button>
+      </div>
+
+      <!-- Список сегментов -->
+      <div class="panel-card">
+        <h3>📋 Сегменты ({{ segments.length }})</h3>
+        <div class="segment-list">
+          <div *ngFor="let seg of segments; let i = index" class="segment-item">
+            <div class="segment-info">
+              <span class="segment-number">#{{ i + 1 }}</span>
+              <span class="segment-icon">{{ seg.type === 'line' ? '📏' : '🔄' }}</span>
+              <div class="segment-details">
+                <div>{{ seg.type === 'line' ? `Прямая ${seg.value} мм` : `Дуга R=${seg.value} мм, ${seg.angle}°` }}</div>
+                <small class="length">Длина: {{ getSegmentLength(seg) | number:'1.2-2' }} мм</small>
+              </div>
+            </div>
+            <div class="segment-actions">
+              <button (click)="moveSegment(seg.id, 'up')" [disabled]="i === 0">↑</button>
+              <button (click)="moveSegment(seg.id, 'down')" [disabled]="i === segments.length - 1">↓</button>
+              <button class="btn-delete" (click)="removeSegment(seg.id)">🗑</button>
+            </div>
+          </div>
+
+          <div *ngIf="segments.length === 0" class="empty-list">
+            Нет сегментов. Добавьте первый.
+          </div>
+        </div>
+      </div>
+
+    </aside>
+
+    <!-- Правая панель: предпросмотр -->
+    <main class="preview-panel">
+      <div class="preview-header">
+        <h3>👁 Предпросмотр траектории</h3>
+      </div>
+      <div class="canvas-wrapper">
+        <canvas #previewCanvas></canvas>
+      </div>
+    </main>
+  </div>
+
+  <div class="modal-footer">
+    <button class="btn-cancel" (click)="onCancel()">Отмена</button>
+    <button class="btn-save" (click)="onSave()" [disabled]="segments.length === 0">
+      💾 Сохранить траекторию
+    </button>
+  </div>
+</div>

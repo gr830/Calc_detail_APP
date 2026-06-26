@@ -1,33 +1,34 @@
+export interface PathSegment {
+  id: number;
+  type: 'line' | 'arc';
+  value: number;                    // длина (line) или радиус (arc) в мм
+  angle: number;                    // угол дуги в градусах (для arc)
+  direction: 'left' | 'right';      // направление дуги
+}
+
 export interface CalculationParams {
-  // Плоскость
-  width: number;         // Ширина детали (мм)
-  length: number;        // Длина детали (мм)
-  
-  // Фреза
-  cutterDiameter: number;    // Диаметр фрезы (мм)
-  stepOverPercent: number;   // % от диаметра фрезы (шаг)
-  depthPasses: number;       // Количество проходов по глубине
-  
-  // Режимы резания
-  spindleSpeed: number;      // Обороты шпинделя n (об/мин)
-  feedPerTooth: number;      // Подача на зуб Sz (мм/зуб)
-  numberOfTeeth: number;     // Количество зубьев фрезы
-  
-  // Время
-  setupTime: number;         // Т вс - вспомогательное время (мин)
+  width: number;
+  length: number;
+  cutterDiameter: number;
+  stepOverPercent: number;
+  depthPasses: number;
+  spindleSpeed: number;
+  feedPerTooth: number;
+  numberOfTeeth: number;
+  setupTime: number;
+  isMassProduction: boolean;        // ← НОВОЕ
+  inputMode: 'rectangle' | 'path';  // ← НОВОЕ
+  pathSegments: PathSegment[];      // ← НОВОЕ
 }
 
 export interface CalculationResult {
-  stepOver: number;           // Режущая часть фрезы (мм)
-  passesAcross: number;       // Количество проходов по ширине
-  totalLength: number;        // L p.x - общая длина проходов (мм)
-  feedPerRevolution: number;  // S об - подача на оборот (мм/об)
-  feedRate: number;           // S мин - подача в минуту (мм/мин)
-  operationalTime: number;    // То - оперативное время (мин)
-  totalTime: number;          // Общее время (мин)
-}
-
-export interface DrawnPath {
-  points: { x: number; y: number }[];
-  width: number;
+  stepOver: number;
+  passesAcross: number;
+  totalLength: number;
+  feedPerRevolution: number;
+  feedRate: number;
+  operationalTime: number;          // Округлённое значение
+  operationalTimeRaw: number;        // До округления
+  totalTime: number;
+  roundingStep: number;             // Шаг округления (0.05 или 0.1)
 }
