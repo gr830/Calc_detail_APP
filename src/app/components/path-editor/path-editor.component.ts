@@ -9,23 +9,32 @@ import { PathSegment } from '../../models/calculation.model';
 
 interface Point {
   id: number;
-  x: number;  // в мм
-  y: number;  // в мм
+  x: number;
+  y: number;
 }
 
-interface EditorSegment {
+interface LineSegment {
   id: number;
-  type: 'line' | 'arc';
+  type: 'line';
   startId: number;
   endId: number;
-  // Для дуги
-  radius?: number;
-  angle?: number;
-  direction?: 'left' | 'right';
-  center?: { x: number; y: number };
 }
 
-type Tool = 'line' | 'arc' | 'select' | 'delete';
+interface ArcSegment {
+  id: number;
+  type: 'arc';
+  startId: number;
+  endId: number;
+  center: { x: number; y: number };
+  radius: number;
+  startAngle: number;
+  endAngle: number;
+  sweepAngle: number;
+  arcLength: number; 
+  ccw: boolean;
+}
+
+type Segment = LineSegment | ArcSegment;
 
 @Component({
   selector: 'app-path-editor',
@@ -42,40 +51,46 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
 
   @ViewChild('editorCanvas', { static: false }) canvasRef!: ElementRef<HTMLCanvasElement>;
 
-  // Состояние редактора
   points: Point[] = [];
-  segments: EditorSegment[] = [];
-  private nextPointId = 1;
-  private nextSegId = 1;
-
-  // Инструмент
-  currentTool: Tool = 'line';
+  segments: Segment[] = [];
+  private nextId = 1;
   
-  // Привязка к углам
-  snapToAngle = true;
-  snapAngles = [0, 45, 90, 135, 180, 225, 270, 315];
-  
-  // Радиус дуги по умолчанию
-  defaultArcRadius = 20;
+  arcMode: 'angle' | 'length' = 'angle';
+  arcArcLength = 50; 
 
-  // Рисование
-  private ctx!: CanvasRenderingContext2D;
-  private startPoint: Point | null = null;  // первая точка при рисовании
-  private mousePos = { x: 0, y: 0 };  // позиция мыши в мм
-  private mouseCanvasPos = { x: 0, y: 0 };  // позиция мыши в пикселях
+  currentPoint: Point | null = null;
+  currentTangent = 0;
 
-  // Камера (для масштабирования)
+  tool: 'line' | 'arc' = 'line';
+
+  lineLength = 100;
+  lineAngle = 0;
+
+  arcRadius = 20; 
+  arcAngle = 90;  
+  arcDirection: 'left' | 'right' = 'left';
+
+  selectedSegment: Segment | null = null;
+
+  cursorWorld = { x: 0, y: 0 };
+  snappedCursor = { x: 0, y: 0 };
+  currentSnap: { kind: string; point: { x: number; y: number } } | null = null;
+
+  snapEndpoint = true;
+  snapMidpoint = true;
+  orthoMode = false;
+
   private camera = { x: 0, y: 0, zoom: 2 };
   private isPanning = false;
   private lastPanPos = { x: 0, y: 0 };
 
-  // Выбор
-  selectedSegment: EditorSegment | null = null;
+  private history: { points: Point[]; segments: Segment[]; currentPoint: Point | null; currentTangent: number }[] = [];
+
+  private ctx!: CanvasRenderingContext2D;
 
   constructor(private calcService: CalculationService) {}
 
   ngOnInit(): void {
-    // Восстанавливаем точки и сегменты из initialSegments
     this.reconstructFromSegments(this.initialSegments);
   }
 
@@ -83,39 +98,40 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
     if (this.canvasRef) {
       this.ctx = this.canvasRef.nativeElement.getContext('2d')!;
       this.resizeCanvas();
-      this.setupEventListeners();
       this.draw();
     }
   }
 
-  ngOnDestroy(): void {
-    document.removeEventListener('keydown', this.handleKeyDown);
-  }
-
-  private setupEventListeners(): void {
-    document.addEventListener('keydown', this.handleKeyDown);
-  }
-
-  private handleKeyDown = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      if (this.startPoint) {
-        // Отменяем текущее рисование
-        this.startPoint = null;
-        this.draw();
-      } else {
-        this.onCancel();
-      }
-    }
-    if (e.key === 'Delete' && this.selectedSegment) {
-      this.deleteSegment(this.selectedSegment.id);
-    }
-  };
+  ngOnDestroy(): void {}
 
   @HostListener('window:resize')
   onWindowResize(): void {
     this.resizeCanvas();
     this.draw();
   }
+
+  @HostListener('document:keydown', ['$event'])
+  handleKeyDown = (e: KeyboardEvent) => {
+    const target = e.target as HTMLElement;
+    const isInput = target.tagName === 'INPUT';
+
+    if (e.ctrlKey && e.key === 'z') { e.preventDefault(); this.undo(); return; }
+    if (e.key === 'Escape') { this.cancelDrawing(); return; }
+    if (e.key === 'F8') { e.preventDefault(); this.orthoMode = !this.orthoMode; this.draw(); return; }
+    
+    // ДОБАВЛЕНО: Быстрое создание по нажатию Enter
+    if (e.key === 'Enter' && this.currentPoint && !isInput) {
+      e.preventDefault();
+      this.createSegmentFromParams();
+    }
+
+    if (!isInput) {
+      const k = e.key.toLowerCase();
+      if (k === 'l') { this.tool = 'line'; this.draw(); return; }
+      if (k === 'a') { this.tool = 'arc'; this.draw(); return; }
+      if (k === 'delete' && this.selectedSegment) { this.deleteSelected(); return; }
+    }
+  };
 
   private resizeCanvas(): void {
     if (!this.canvasRef) return;
@@ -124,24 +140,20 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
     if (parent) {
       canvas.width = parent.clientWidth;
       canvas.height = parent.clientHeight;
-      // Центрируем камеру при первом открытии
-      if (this.points.length === 0) {
+      if (this.points.length === 0 && this.camera.x === 0) {
         this.camera.x = canvas.width / 2;
         this.camera.y = canvas.height / 2;
       }
     }
   }
 
-  // === ПРЕОБРАЗОВАНИЕ КООРДИНАТ ===
-  // Мировые (мм) -> экранные (px)
   private worldToScreen(x: number, y: number): { x: number; y: number } {
     return {
       x: this.camera.x + x * this.camera.zoom,
-      y: this.camera.y - y * this.camera.zoom  // инвертируем Y (вверх = плюс)
+      y: this.camera.y - y * this.camera.zoom
     };
   }
 
-  // Экранные (px) -> мировые (мм)
   private screenToWorld(px: number, py: number): { x: number; y: number } {
     return {
       x: (px - this.camera.x) / this.camera.zoom,
@@ -149,10 +161,8 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
     };
   }
 
-  // === ОБРАБОТКА МЫШИ ===
   onMouseDown(event: MouseEvent): void {
     if (event.button === 1 || (event.button === 0 && event.altKey)) {
-      // Средняя кнопка или Alt+ЛКМ - панорамирование
       this.isPanning = true;
       this.lastPanPos = { x: event.clientX, y: event.clientY };
       return;
@@ -163,16 +173,7 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
       const rect = canvas.getBoundingClientRect();
       const px = event.clientX - rect.left;
       const py = event.clientY - rect.top;
-      const worldPos = this.screenToWorld(px, py);
-
-      if (this.currentTool === 'select') {
-        this.handleSelect(worldPos);
-      } else if (this.currentTool === 'delete') {
-        this.handleDeleteClick(worldPos);
-      } else {
-        // Рисование
-        this.handleDrawClick(worldPos, event.shiftKey);
-      }
+      this.handleCanvasClick(px, py);
     }
   }
 
@@ -183,36 +184,61 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
     const py = event.clientY - rect.top;
 
     if (this.isPanning) {
-      const dx = event.clientX - this.lastPanPos.x;
-      const dy = event.clientY - this.lastPanPos.y;
-      this.camera.x += dx;
-      this.camera.y += dy;
+      this.camera.x += event.clientX - this.lastPanPos.x;
+      this.camera.y += event.clientY - this.lastPanPos.y;
       this.lastPanPos = { x: event.clientX, y: event.clientY };
       this.draw();
       return;
     }
 
-    this.mouseCanvasPos = { x: px, y: py };
-    this.mousePos = this.screenToWorld(px, py);
+    this.cursorWorld = this.screenToWorld(px, py);
+    this.currentSnap = this.findSnap(px, py);
+    this.snappedCursor = this.currentSnap ? { ...this.currentSnap.point } : this.snapToGrid(this.cursorWorld);
 
-    // Применяем привязку к углам при рисовании
-    if (this.startPoint && (this.currentTool === 'line' || this.currentTool === 'arc')) {
-      const snapped = this.snapPosition(this.startPoint, this.mousePos, event.shiftKey);
-      this.mousePos = snapped;
-    }
+    // =========================================================
+    // НОВАЯ NX ЛОГИКА: Автоматический расчет по положению мыши
+    // =========================================================
+    if (this.currentPoint) {
+      const dx = this.snappedCursor.x - this.currentPoint.x;
+      const dy = this.snappedCursor.y - this.currentPoint.y;
+      const dist = Math.hypot(dx, dy);
 
-    // Привязка к сетке
-    if (!this.startPoint) {
-      this.mousePos = this.snapToGrid(this.mousePos);
+      if (this.tool === 'line' && dist > 0.1) {
+        // Динамический расчет длины и угла для линии
+        this.lineLength = Math.round(dist * 100) / 100;
+        let ang = Math.atan2(dy, dx) * 180 / Math.PI;
+        if (ang < 0) ang += 360;
+        this.lineAngle = Math.round(ang * 100) / 100;
+        
+      } else if (this.tool === 'arc' && dist > 0.1) {
+        // Динамический расчет дуги по хорде к курсору (Сохраняем касательность)
+        const chordAngle = Math.atan2(dy, dx);
+        const tangentRad = this.currentTangent * Math.PI / 180;
+        
+        let alpha = chordAngle - tangentRad;
+        while (alpha > Math.PI) alpha -= 2 * Math.PI;
+        while (alpha < -Math.PI) alpha += 2 * Math.PI;
+        
+        // Рисуем дугу только если курсор не лежит ровно на линии касательной
+        if (Math.abs(alpha) > 0.01 && Math.abs(Math.abs(alpha) - Math.PI) > 0.01) {
+          this.arcMode = 'angle';
+          
+          const R = dist / (2 * Math.sin(Math.abs(alpha)));
+          this.arcRadius = Math.round(R * 100) / 100;
+          
+          const sweepRad = 2 * Math.abs(alpha);
+          this.arcAngle = Math.round((sweepRad * 180 / Math.PI) * 100) / 100;
+          
+          this.arcDirection = alpha > 0 ? 'left' : 'right';
+        }
+      }
     }
 
     this.draw();
   }
 
   onMouseUp(event: MouseEvent): void {
-    if (event.button === 1 || this.isPanning) {
-      this.isPanning = false;
-    }
+    if (this.isPanning) this.isPanning = false;
   }
 
   onWheel(event: WheelEvent): void {
@@ -222,228 +248,242 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
     const px = event.clientX - rect.left;
     const py = event.clientY - rect.top;
 
-    const zoomFactor = event.deltaY > 0 ? 0.9 : 1.1;
+    const factor = event.deltaY > 0 ? 0.9 : 1.1;
     const oldZoom = this.camera.zoom;
-    this.camera.zoom = Math.max(0.5, Math.min(10, this.camera.zoom * zoomFactor));
-
-    // Зум к курсору
+    this.camera.zoom = Math.max(0.3, Math.min(15, this.camera.zoom * factor));
     this.camera.x = px - (px - this.camera.x) * (this.camera.zoom / oldZoom);
     this.camera.y = py - (py - this.camera.y) * (this.camera.zoom / oldZoom);
-
     this.draw();
   }
 
-  // === ПРИВЯЗКА И СНАП ===
+  onContextMenu(event: MouseEvent): void {
+    event.preventDefault();
+  }
+
   private snapToGrid(pos: { x: number; y: number }): { x: number; y: number } {
-    const gridSize = 5; // 5 мм
+    const g = 5;
     return {
-      x: Math.round(pos.x / gridSize) * gridSize,
-      y: Math.round(pos.y / gridSize) * gridSize
+      x: Math.round(pos.x / g) * g,
+      y: Math.round(pos.y / g) * g
     };
   }
 
-  private snapPosition(from: Point, to: { x: number; y: number }, forceSnap: boolean): { x: number; y: number } {
-    if (!this.snapToAngle && !forceSnap) return to;
-
-    const dx = to.x - from.x;
-    const dy = to.y - from.y;
-    const distance = Math.sqrt(dx * dx + dy * dy);
-    let angle = Math.atan2(dy, dx) * 180 / Math.PI;
-
-    // Привязка к ближайшему углу
-    let closestAngle = angle;
-    let minDiff = 360;
-    for (const snapAngle of this.snapAngles) {
-      let diff = Math.abs(angle - snapAngle);
-      if (diff > 180) diff = 360 - diff;
-      if (diff < minDiff) {
-        minDiff = diff;
-        closestAngle = snapAngle;
+  private findSnap(px: number, py: number): { kind: string; point: { x: number; y: number } } | null {
+    const r = 8;
+    if (this.snapEndpoint) {
+      for (const p of this.points) {
+        const sp = this.worldToScreen(p.x, p.y);
+        if (Math.hypot(sp.x - px, sp.y - py) < r) {
+          return { kind: 'endpoint', point: p };
+        }
       }
     }
-
-    // Применяем привязку только если угол близок (15°)
-    if (minDiff < 15 || forceSnap) {
-      const rad = closestAngle * Math.PI / 180;
-      // Округляем длину до 5 мм
-      const snappedDistance = Math.round(distance / 5) * 5;
-      return {
-        x: from.x + Math.cos(rad) * snappedDistance,
-        y: from.y + Math.sin(rad) * snappedDistance
-      };
+    if (this.snapMidpoint) {
+      for (const seg of this.segments) {
+        if (seg.type === 'line') {
+          const s = this.points.find(p => p.id === seg.startId);
+          const e = this.points.find(p => p.id === seg.endId);
+          if (s && e) {
+            const mid = { x: (s.x + e.x) / 2, y: (s.y + e.y) / 2 };
+            const sp = this.worldToScreen(mid.x, mid.y);
+            if (Math.hypot(sp.x - px, sp.y - py) < r) {
+              return { kind: 'midpoint', point: mid };
+            }
+          }
+        }
+      }
     }
-
-    // Просто округляем длину
-    const snappedDistance = Math.round(distance / 5) * 5;
-    const rad = angle * Math.PI / 180;
-    return {
-      x: from.x + Math.cos(rad) * snappedDistance,
-      y: from.y + Math.sin(rad) * snappedDistance
-    };
+    return null;
   }
 
-  // === ЛОГИКА ИНСТРУМЕНТОВ ===
-  private handleDrawClick(pos: { x: number; y: number }, shiftKey: boolean): void {
-    // Ищем ближайшую точку в радиусе 10мм
-    const existingPoint = this.findPointNear(pos, 10);
+  // === ОБНОВЛЕННАЯ ЛОГИКА КЛИКА: ИНТЕРАКТИВНОЕ ПОСТРОЕНИЕ ===
+  private handleCanvasClick(px: number, py: number): void {
+    const pos = this.currentSnap ? { ...this.currentSnap.point } : this.snappedCursor;
 
-    if (!this.startPoint) {
-      // Первая точка
-      if (existingPoint) {
-        this.startPoint = existingPoint;
-      } else {
-        const newPoint: Point = { id: this.nextPointId++, x: pos.x, y: pos.y };
-        this.points.push(newPoint);
-        this.startPoint = newPoint;
-      }
+    if (!this.currentPoint) {
+      this.pushHistory();
+      this.currentPoint = this.findOrCreatePoint(pos);
+      this.currentTangent = 0;
+      this.draw();
     } else {
-      // Вторая точка - создаём сегмент
-      let endPoint: Point;
-      if (existingPoint && existingPoint.id !== this.startPoint.id) {
-        endPoint = existingPoint;
-      } else if (existingPoint && existingPoint.id === this.startPoint.id) {
-        // Клик в ту же точку - игнорируем
-        return;
-      } else {
-        endPoint = { id: this.nextPointId++, x: pos.x, y: pos.y };
-        this.points.push(endPoint);
-      }
-
-      if (this.currentTool === 'line') {
-        this.createLineSegment(this.startPoint, endPoint);
-      } else if (this.currentTool === 'arc') {
-        this.createArcSegment(this.startPoint, endPoint);
-      }
-
-      // Продолжаем цепочку: конечная точка становится начальной
-      this.startPoint = endPoint;
-    }
-    this.draw();
-  }
-
-  private handleSelect(pos: { x: number; y: number }): void {
-    this.selectedSegment = this.findSegmentNear(pos, 10);
-    this.draw();
-  }
-
-  private handleDeleteClick(pos: { x: number; y: number }): void {
-    const seg = this.findSegmentNear(pos, 10);
-    if (seg) {
-      this.deleteSegment(seg.id);
+      // Клик по холсту теперь СОЗДАЕТ сегмент, как в CAD (NX)
+      // Так как onMouseMove уже обновил все нужные параметры, нам нужно лишь вызвать метод создания
+      this.createSegmentFromParams();
     }
   }
 
-  private findPointNear(pos: { x: number; y: number }, radius: number): Point | null {
+  private findOrCreatePoint(pos: { x: number; y: number }): Point {
     for (const p of this.points) {
-      const dx = p.x - pos.x;
-      const dy = p.y - pos.y;
-      if (Math.sqrt(dx * dx + dy * dy) < radius) {
-        return p;
-      }
+      if (Math.hypot(p.x - pos.x, p.y - pos.y) < 0.1) return p;
     }
-    return null;
+    const np: Point = { id: this.nextId++, x: pos.x, y: pos.y };
+    this.points.push(np);
+    return np;
   }
 
-  private findSegmentNear(pos: { x: number; y: number }, radius: number): EditorSegment | null {
-    for (const seg of this.segments) {
-      const start = this.points.find(p => p.id === seg.startId)!;
-      const end = this.points.find(p => p.id === seg.endId)!;
-      
-      if (seg.type === 'line') {
-        const dist = this.pointToLineDistance(pos, start, end);
-        if (dist < radius) return seg;
-      } else {
-        // Для дуги упрощённо - проверяем расстояние до хорды
-        const dist = this.pointToLineDistance(pos, start, end);
-        if (dist < radius) return seg;
-      }
+  createSegmentFromParams(): void {
+    if (!this.currentPoint) return;
+    
+    // Сохраняем состояние ДО создания элемента (для Ctrl+Z)
+    this.pushHistory();
+
+    if (this.tool === 'line') {
+      if (this.lineLength < 0.1) return; // Игнорируем нулевые клики
+      this.createLineFromCurrentPoint();
+    } else {
+      if (this.arcRadius < 0.1) return; // Игнорируем нулевые клики
+      this.createArcFromCurrentPoint();
     }
-    return null;
-  }
-
-  private pointToLineDistance(p: { x: number; y: number }, a: Point, b: Point): number {
-    const A = p.x - a.x;
-    const B = p.y - a.y;
-    const C = b.x - a.x;
-    const D = b.y - a.y;
-    const dot = A * C + B * D;
-    const lenSq = C * C + D * D;
-    let param = lenSq !== 0 ? dot / lenSq : -1;
-    param = Math.max(0, Math.min(1, param));
-    const xx = a.x + param * C;
-    const yy = a.y + param * D;
-    return Math.sqrt((p.x - xx) ** 2 + (p.y - yy) ** 2);
-  }
-
-  private createLineSegment(start: Point, end: Point): void {
-    const seg: EditorSegment = {
-      id: this.nextSegId++,
-      type: 'line',
-      startId: start.id,
-      endId: end.id
-    };
-    this.segments.push(seg);
-  }
-
-  private createArcSegment(start: Point, end: Point): void {
-    const dx = end.x - start.x;
-    const dy = end.y - start.y;
-    const chordLength = Math.sqrt(dx * dx + dy * dy);
     
-    if (chordLength < 1) return;  // слишком короткая хорда
-
-    // Радиус дуги (берём больше хорды для красивого вида)
-    const radius = Math.max(this.defaultArcRadius, chordLength * 0.6);
-    
-    // Центр дуги (сверху от хорды - по умолчанию)
-    const midX = (start.x + end.x) / 2;
-    const midY = (start.y + end.y) / 2;
-    const perpAngle = Math.atan2(dy, dx) + Math.PI / 2;
-    const h = Math.sqrt(Math.max(0, radius * radius - (chordLength / 2) ** 2));
-    
-    const centerX = midX + Math.cos(perpAngle) * h;
-    const centerY = midY + Math.sin(perpAngle) * h;
-
-    // Угол дуги
-    const startAngle = Math.atan2(start.y - centerY, start.x - centerX);
-    const endAngle = Math.atan2(end.y - centerY, end.x - centerX);
-    let angle = (endAngle - startAngle) * 180 / Math.PI;
-    if (angle < 0) angle += 360;
-    if (angle > 180) angle = 360 - angle;  // меньшая дуга
-
-    const seg: EditorSegment = {
-      id: this.nextSegId++,
-      type: 'arc',
-      startId: start.id,
-      endId: end.id,
-      radius: radius,
-      angle: angle,
-      direction: 'left',
-      center: { x: centerX, y: centerY }
-    };
-    this.segments.push(seg);
-  }
-
-  deleteSegment(id: number): void {
-    this.segments = this.segments.filter(s => s.id !== id);
-    if (this.selectedSegment?.id === id) {
-      this.selectedSegment = null;
-    }
-    // Удаляем точки, которые больше не используются
-    this.cleanupUnusedPoints();
     this.draw();
+  }
+
+  private createLineFromCurrentPoint(): void {
+    const rad = this.lineAngle * Math.PI / 180;
+    const endX = this.currentPoint!.x + Math.cos(rad) * this.lineLength;
+    const endY = this.currentPoint!.y + Math.sin(rad) * this.lineLength;
+
+    const endPoint: Point = { id: this.nextId++, x: endX, y: endY };
+    this.points.push(endPoint);
+
+    this.segments.push({
+      id: this.nextId++,
+      type: 'line',
+      startId: this.currentPoint!.id,
+      endId: endPoint.id
+    });
+
+    this.currentPoint = endPoint;
+    this.currentTangent = this.lineAngle;
+  }
+
+  private createArcFromCurrentPoint(): void {
+    const R = this.arcRadius;
+    let turnAngleDeg = 0;
+    let arcLen = 0;
+
+    if (this.arcMode === 'angle') {
+      turnAngleDeg = this.arcAngle;
+      arcLen = R * (turnAngleDeg * Math.PI / 180);
+    } else {
+      arcLen = this.arcArcLength;
+      turnAngleDeg = (arcLen / R) * (180 / Math.PI);
+    }
+
+    const turnRad = turnAngleDeg * Math.PI / 180;
+    const tangentRad = this.currentTangent * Math.PI / 180;
+
+    const dir = this.arcDirection === 'left' ? 1 : -1;
+
+    const normalRad = tangentRad + dir * (Math.PI / 2);
+    const centerX = this.currentPoint!.x + R * Math.cos(normalRad);
+    const centerY = this.currentPoint!.y + R * Math.sin(normalRad);
+
+    const startAngle = normalRad + Math.PI; 
+    const endAngle = startAngle + dir * turnRad;
+
+    const endX = centerX + R * Math.cos(endAngle);
+    const endY = centerY + R * Math.sin(endAngle);
+
+    const endPoint: Point = { id: this.nextId++, x: endX, y: endY };
+    this.points.push(endPoint);
+
+    this.segments.push({
+      id: this.nextId++,
+      type: 'arc',
+      startId: this.currentPoint!.id,
+      endId: endPoint.id,
+      center: { x: centerX, y: centerY },
+      radius: R,
+      startAngle: startAngle,
+      endAngle: endAngle,
+      sweepAngle: turnAngleDeg,
+      arcLength: arcLen,
+      ccw: this.arcDirection === 'left'
+    });
+
+    this.currentPoint = endPoint;
+    this.currentTangent = this.currentTangent + dir * turnAngleDeg;
+
+    while (this.currentTangent < 0) this.currentTangent += 360;
+    while (this.currentTangent >= 360) this.currentTangent -= 360;
+  }
+
+  cancelDrawing(): void {
+    if (this.currentPoint && this.segments.length === 0) {
+      this.points = this.points.filter(p => p.id !== this.currentPoint!.id);
+    }
+    this.currentPoint = null;
+    this.currentTangent = 0;
+    this.selectedSegment = null;
+    this.draw();
+  }
+
+  deleteSelected(): void {
+    if (this.selectedSegment) {
+      this.pushHistory();
+      this.segments = this.segments.filter(s => s.id !== this.selectedSegment!.id);
+      this.selectedSegment = null;
+      this.cleanupUnusedPoints();
+      this.draw();
+    }
   }
 
   private cleanupUnusedPoints(): void {
-    const usedIds = new Set<number>();
-    for (const seg of this.segments) {
-      usedIds.add(seg.startId);
-      usedIds.add(seg.endId);
-    }
-    this.points = this.points.filter(p => usedIds.has(p.id));
+    const used = new Set<number>();
+    this.segments.forEach(s => { used.add(s.startId); used.add(s.endId); });
+    this.points = this.points.filter(p => used.has(p.id));
   }
 
-  // === ОТРИСОВКА ===
+  private pushHistory(): void {
+    this.history.push({
+      points: JSON.parse(JSON.stringify(this.points)),
+      segments: JSON.parse(JSON.stringify(this.segments)),
+      currentPoint: this.currentPoint ? { ...this.currentPoint } : null,
+      currentTangent: this.currentTangent
+    });
+    if (this.history.length > 50) this.history.shift();
+  }
+
+  undo(): void {
+    const last = this.history.pop();
+    if (last) {
+      this.points = last.points;
+      this.segments = last.segments;
+      this.currentPoint = last.currentPoint;
+      this.currentTangent = last.currentTangent;
+      this.selectedSegment = null;
+      this.draw();
+    }
+  }
+
+  selectSegmentFromList(seg: Segment): void {
+    this.selectedSegment = seg;
+    this.draw();
+  }
+
+  getSegmentLength(seg: Segment): number {
+    if (seg.type === 'line') {
+      const s = this.points.find(p => p.id === seg.startId)!;
+      const e = this.points.find(p => p.id === seg.endId)!;
+      return Math.hypot(e.x - s.x, e.y - s.y);
+    } else {
+      return seg.arcLength;
+    }
+  }
+
+  getSegmentAngle(seg: Segment): number {
+    if (seg.type === 'line') {
+      const s = this.points.find(p => p.id === seg.startId)!;
+      const e = this.points.find(p => p.id === seg.endId)!;
+      let ang = Math.atan2(e.y - s.y, e.x - s.x) * 180 / Math.PI;
+      if (ang < 0) ang += 360;
+      return ang;
+    } else {
+      return seg.sweepAngle;
+    }
+  }
+
   private draw(): void {
     if (!this.ctx || !this.canvasRef) return;
     const canvas = this.canvasRef.nativeElement;
@@ -452,55 +492,46 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
     this.drawGrid();
     this.drawSegments();
     this.drawPoints();
+    this.drawCurrentTangent();
     this.drawPreview();
-    this.drawInfo();
+    this.drawSnapIndicator();
+    this.drawHUD();
   }
 
   private drawGrid(): void {
     const canvas = this.canvasRef.nativeElement;
-    const gridSize = 50; // 50 мм
-    const startWorld = this.screenToWorld(0, 0);
-    const endWorld = this.screenToWorld(canvas.width, canvas.height);
+    const gridSize = 50;
+    const sw = this.screenToWorld(0, 0);
+    const ew = this.screenToWorld(canvas.width, canvas.height);
 
     this.ctx.strokeStyle = '#1a2a3e';
     this.ctx.lineWidth = 1;
+    const sx = Math.floor(sw.x / gridSize) * gridSize;
+    const ex = Math.ceil(ew.x / gridSize) * gridSize;
+    const sy = Math.floor(sw.y / gridSize) * gridSize;
+    const ey = Math.ceil(ew.y / gridSize) * gridSize;
 
-    const startX = Math.floor(startWorld.x / gridSize) * gridSize;
-    const endX = Math.ceil(endWorld.x / gridSize) * gridSize;
-    const startY = Math.floor(startWorld.y / gridSize) * gridSize;
-    const endY = Math.ceil(endWorld.y / gridSize) * gridSize;
-
-    // Вертикальные линии
-    for (let x = startX; x <= endX; x += gridSize) {
-      const p1 = this.worldToScreen(x, startWorld.y);
-      const p2 = this.worldToScreen(x, endWorld.y);
-      this.ctx.beginPath();
-      this.ctx.moveTo(p1.x, p1.y);
-      this.ctx.lineTo(p2.x, p2.y);
-      this.ctx.stroke();
-    }
-
-    // Горизонтальные линии
-    for (let y = startY; y <= endY; y += gridSize) {
-      const p1 = this.worldToScreen(startWorld.x, y);
-      const p2 = this.worldToScreen(endWorld.x, y);
-      this.ctx.beginPath();
-      this.ctx.moveTo(p1.x, p1.y);
-      this.ctx.lineTo(p2.x, p2.y);
-      this.ctx.stroke();
-    }
-
-    // Оси
-    this.ctx.strokeStyle = '#2a4a6e';
-    this.ctx.lineWidth = 2;
-    const origin = this.worldToScreen(0, 0);
     this.ctx.beginPath();
-    this.ctx.moveTo(origin.x, 0);
-    this.ctx.lineTo(origin.x, canvas.height);
+    for (let x = sx; x <= ex; x += gridSize) {
+      const p1 = this.worldToScreen(x, sw.y);
+      const p2 = this.worldToScreen(x, ew.y);
+      this.ctx.moveTo(p1.x, p1.y);
+      this.ctx.lineTo(p2.x, p2.y);
+    }
+    for (let y = sy; y <= ey; y += gridSize) {
+      const p1 = this.worldToScreen(sw.x, y);
+      const p2 = this.worldToScreen(ew.x, y);
+      this.ctx.moveTo(p1.x, p1.y);
+      this.ctx.lineTo(p2.x, p2.y);
+    }
     this.ctx.stroke();
+
+    this.ctx.strokeStyle = '#3a5a8e';
+    this.ctx.lineWidth = 1.5;
+    const o = this.worldToScreen(0, 0);
     this.ctx.beginPath();
-    this.ctx.moveTo(0, origin.y);
-    this.ctx.lineTo(canvas.width, origin.y);
+    this.ctx.moveTo(o.x, 0); this.ctx.lineTo(o.x, canvas.height);
+    this.ctx.moveTo(0, o.y); this.ctx.lineTo(canvas.width, o.y);
     this.ctx.stroke();
   }
 
@@ -510,189 +541,357 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
       const end = this.points.find(p => p.id === seg.endId);
       if (!start || !end) continue;
 
-      const p1 = this.worldToScreen(start.x, start.y);
-      const p2 = this.worldToScreen(end.x, end.y);
-
       const isSelected = this.selectedSegment?.id === seg.id;
       this.ctx.strokeStyle = isSelected ? '#ffaa00' : '#ff4444';
-      this.ctx.lineWidth = isSelected ? 4 : 3;
+      this.ctx.lineWidth = isSelected ? 4 : 2.5;
 
       if (seg.type === 'line') {
+        const p1 = this.worldToScreen(start.x, start.y);
+        const p2 = this.worldToScreen(end.x, end.y);
         this.ctx.beginPath();
         this.ctx.moveTo(p1.x, p1.y);
         this.ctx.lineTo(p2.x, p2.y);
         this.ctx.stroke();
 
-        // Размер
-        this.drawDimension(start, end);
+        const len = Math.hypot(end.x - start.x, end.y - start.y);
+        const ang = Math.atan2(end.y - start.y, end.x - start.x) * 180 / Math.PI;
+        const mid = this.worldToScreen((start.x + end.x) / 2, (start.y + end.y) / 2);
+        const text = `${len.toFixed(1)} мм / ${ang.toFixed(0)}°`;
+        this.ctx.font = 'bold 11px monospace';
+        const w = this.ctx.measureText(text).width + 10;
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+        this.ctx.fillRect(mid.x - w / 2, mid.y - 18, w, 16);
+        this.ctx.fillStyle = '#4caf50';
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText(text, mid.x, mid.y - 10);
+
       } else {
-        // Дуга
-        if (seg.center) {
-          const center = this.worldToScreen(seg.center.x, seg.center.y);
-          const radius = seg.radius! * this.camera.zoom;
-          const startAngle = Math.atan2(start.y - seg.center.y, start.x - seg.center.x);
-          const endAngle = Math.atan2(end.y - seg.center.y, end.x - seg.center.x);
+        const c = this.worldToScreen(seg.center.x, seg.center.y);
+        const r = seg.radius * this.camera.zoom;
 
-          this.ctx.beginPath();
-          this.ctx.arc(center.x, center.y, radius, startAngle, endAngle, false);
-          this.ctx.stroke();
+        this.ctx.beginPath();
+        this.ctx.arc(c.x, c.y, r, -seg.startAngle, -seg.endAngle, seg.ccw);
+        this.ctx.stroke();
 
-          // Подпись радиуса
-          const midAngle = (startAngle + endAngle) / 2;
-          const labelX = center.x + Math.cos(midAngle) * (radius + 15);
-          const labelY = center.y + Math.sin(midAngle) * (radius + 15);
+        const ps = this.worldToScreen(start.x, start.y);
+        const pe = this.worldToScreen(end.x, end.y);
+        this.ctx.strokeStyle = 'rgba(136, 136, 136, 0.4)';
+        this.ctx.lineWidth = 1;
+        this.ctx.setLineDash([3, 3]);
+        this.ctx.beginPath();
+        this.ctx.moveTo(ps.x, ps.y);
+        this.ctx.lineTo(c.x, c.y);
+        this.ctx.lineTo(pe.x, pe.y);
+        this.ctx.stroke();
+        this.ctx.setLineDash([]);
+
+        this.ctx.fillStyle = isSelected ? '#ffaa00' : '#888';
+        this.ctx.beginPath();
+        this.ctx.arc(c.x, c.y, 3, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.strokeStyle = '#fff';
+        this.ctx.lineWidth = 1;
+        this.ctx.stroke();
+
+        const angleDiff = seg.ccw
+          ? (seg.endAngle - seg.startAngle)
+          : (seg.startAngle - seg.endAngle);
+        const midAng = seg.ccw
+          ? seg.startAngle + angleDiff / 2
+          : seg.startAngle - angleDiff / 2;
           
-          this.ctx.fillStyle = '#ffaa00';
-          this.ctx.font = 'bold 12px monospace';
-          this.ctx.textAlign = 'center';
-          this.ctx.fillText(`R${seg.radius!.toFixed(0)}`, labelX, labelY);
-          this.ctx.font = '10px monospace';
-          this.ctx.fillText(`${seg.angle!.toFixed(0)}°`, labelX, labelY + 12);
-        }
+        const lx = c.x + Math.cos(-midAng) * (r + 25);
+        const ly = c.y + Math.sin(-midAng) * (r + 25);
+
+        const angleDeg = Math.abs(angleDiff) * 180 / Math.PI;
+        this.ctx.fillStyle = '#ffaa00';
+        this.ctx.font = 'bold 12px monospace';
+        this.ctx.textAlign = 'center';
+        this.ctx.fillText(`R${seg.radius.toFixed(1)}`, lx, ly);
+        this.ctx.font = '10px monospace';
+        this.ctx.fillStyle = '#aaa';
+        this.ctx.fillText(`${angleDeg.toFixed(1)}°`, lx, ly + 14);
       }
     }
   }
 
-  private drawDimension(start: Point, end: Point): void {
-    const dx = end.x - start.x;
-    const dy = end.y - start.y;
-    const length = Math.sqrt(dx * dx + dy * dy);
-    const midX = (start.x + end.x) / 2;
-    const midY = (start.y + end.y) / 2;
-
-    const p = this.worldToScreen(midX, midY);
-
-    // Фон для текста
-    const text = `${length.toFixed(0)} мм`;
-    this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    this.ctx.font = 'bold 12px monospace';
-    const textWidth = this.ctx.measureText(text).width;
-    this.ctx.fillRect(p.x - textWidth / 2 - 4, p.y - 10, textWidth + 8, 16);
-
-    // Текст
-    this.ctx.fillStyle = '#fff';
-    this.ctx.textAlign = 'center';
-    this.ctx.textBaseline = 'middle';
-    this.ctx.fillText(text, p.x, p.y);
-  }
-
   private drawPoints(): void {
-    for (const point of this.points) {
-      const p = this.worldToScreen(point.x, point.y);
-      const isStartPoint = this.startPoint?.id === point.id;
+    for (const p of this.points) {
+      const sp = this.worldToScreen(p.x, p.y);
+      const isCurrent = this.currentPoint?.id === p.id;
 
+      this.ctx.fillStyle = isCurrent ? '#4caf50' : '#4a90d9';
       this.ctx.beginPath();
-      this.ctx.arc(p.x, p.y, isStartPoint ? 7 : 5, 0, Math.PI * 2);
-      this.ctx.fillStyle = isStartPoint ? '#4caf50' : '#4a90d9';
+      this.ctx.arc(sp.x, sp.y, isCurrent ? 6 : 4, 0, Math.PI * 2);
       this.ctx.fill();
       this.ctx.strokeStyle = '#fff';
-      this.ctx.lineWidth = 2;
+      this.ctx.lineWidth = 1.5;
       this.ctx.stroke();
     }
+  }
+
+  private drawCurrentTangent(): void {
+    if (!this.currentPoint) return;
+
+    const p = this.worldToScreen(this.currentPoint.x, this.currentPoint.y);
+    const len = 40;
+    const rad = this.currentTangent * Math.PI / 180;
+    const ex = p.x + Math.cos(rad) * len;
+    const ey = p.y - Math.sin(rad) * len;
+
+    this.ctx.strokeStyle = 'rgba(76, 175, 80, 0.6)';
+    this.ctx.lineWidth = 1.5;
+    this.ctx.setLineDash([4, 4]);
+    this.ctx.beginPath();
+    this.ctx.moveTo(p.x, p.y);
+    this.ctx.lineTo(ex, ey);
+    this.ctx.stroke();
+    this.ctx.setLineDash([]);
+
+    const arrowLen = 8;
+    const arrowAng = Math.atan2(ey - p.y, ex - p.x);
+    this.ctx.fillStyle = 'rgba(76, 175, 80, 0.8)';
+    this.ctx.beginPath();
+    this.ctx.moveTo(ex, ey);
+    this.ctx.lineTo(
+      ex - arrowLen * Math.cos(arrowAng - 0.4),
+      ey - arrowLen * Math.sin(arrowAng - 0.4)
+    );
+    this.ctx.lineTo(
+      ex - arrowLen * Math.cos(arrowAng + 0.4),
+      ey - arrowLen * Math.sin(arrowAng + 0.4)
+    );
+    this.ctx.closePath();
+    this.ctx.fill();
   }
 
   private drawPreview(): void {
-    if (!this.startPoint) return;
+    if (!this.currentPoint) return;
 
-    const p1 = this.worldToScreen(this.startPoint.x, this.startPoint.y);
-    const p2 = this.worldToScreen(this.mousePos.x, this.mousePos.y);
+    const p = this.worldToScreen(this.currentPoint.x, this.currentPoint.y);
 
-    // Пунктирная линия предпросмотра
-    this.ctx.strokeStyle = 'rgba(76, 175, 80, 0.7)';
-    this.ctx.lineWidth = 2;
-    this.ctx.setLineDash([5, 5]);
-    
-    if (this.currentTool === 'line') {
+    if (this.tool === 'line') {
+      const rad = this.lineAngle * Math.PI / 180;
+      const endX = this.currentPoint.x + Math.cos(rad) * this.lineLength;
+      const endY = this.currentPoint.y + Math.sin(rad) * this.lineLength;
+      const pe = this.worldToScreen(endX, endY);
+
+      this.ctx.strokeStyle = 'rgba(76, 175, 80, 0.7)';
+      this.ctx.lineWidth = 2;
+      this.ctx.setLineDash([6, 4]);
+      this.ctx.beginPath();
+      this.ctx.moveTo(p.x, p.y);
+      this.ctx.lineTo(pe.x, pe.y);
+      this.ctx.stroke();
+      this.ctx.setLineDash([]);
+
+      const midX = (p.x + pe.x) / 2;
+      const midY = (p.y + pe.y) / 2;
+      const text = `${this.lineLength} мм / ${this.lineAngle}°`;
+      this.ctx.font = 'bold 12px monospace';
+      const w = this.ctx.measureText(text).width + 10;
+      this.ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+      this.ctx.fillRect(midX - w / 2, midY - 20, w, 18);
+      this.ctx.fillStyle = '#4caf50';
+      this.ctx.textAlign = 'center';
+      this.ctx.textBaseline = 'middle';
+      this.ctx.fillText(text, midX, midY - 11);
+
+    } else {
+      const R = this.arcRadius;
+      let turnAngleDeg = this.arcMode === 'angle' ? this.arcAngle : (this.arcArcLength / R) * (180 / Math.PI);
+      const turnRad = turnAngleDeg * Math.PI / 180;
+      const tangentRad = this.currentTangent * Math.PI / 180;
+      const dir = this.arcDirection === 'left' ? 1 : -1;
+      
+      const normalRad = tangentRad + dir * (Math.PI / 2);
+      const centerX = this.currentPoint.x + R * Math.cos(normalRad);
+      const centerY = this.currentPoint.y + R * Math.sin(normalRad);
+      
+      const startAngle = normalRad + Math.PI;
+      const endAngle = startAngle + dir * turnRad;
+
+      const c = this.worldToScreen(centerX, centerY);
+      const r = R * this.camera.zoom;
+
+      const p1 = this.worldToScreen(this.currentPoint.x, this.currentPoint.y);
+      const endX = centerX + R * Math.cos(endAngle);
+      const endY = centerY + R * Math.sin(endAngle);
+      const p2 = this.worldToScreen(endX, endY);
+      
+      this.ctx.strokeStyle = 'rgba(255, 170, 0, 0.3)';
+      this.ctx.lineWidth = 1;
+      this.ctx.setLineDash([4, 4]);
       this.ctx.beginPath();
       this.ctx.moveTo(p1.x, p1.y);
       this.ctx.lineTo(p2.x, p2.y);
       this.ctx.stroke();
-    } else if (this.currentTool === 'arc') {
-      // Предпросмотр дуги - упрощённо
+      this.ctx.setLineDash([]);
+
+      this.ctx.strokeStyle = 'rgba(255, 170, 0, 0.8)';
+      this.ctx.lineWidth = 2.5;
+      this.ctx.setLineDash([6, 4]);
+      
+      this.ctx.beginPath();
+      this.ctx.arc(c.x, c.y, r, -startAngle, -endAngle, this.arcDirection === 'left');
+      this.ctx.stroke();
+      this.ctx.setLineDash([]);
+
+      this.ctx.strokeStyle = 'rgba(255, 170, 0, 0.3)';
+      this.ctx.lineWidth = 1;
+      this.ctx.setLineDash([3, 3]);
       this.ctx.beginPath();
       this.ctx.moveTo(p1.x, p1.y);
+      this.ctx.lineTo(c.x, c.y);
       this.ctx.lineTo(p2.x, p2.y);
       this.ctx.stroke();
+      this.ctx.setLineDash([]);
+
+      this.ctx.fillStyle = 'rgba(255, 170, 0, 0.8)';
+      this.ctx.beginPath();
+      this.ctx.arc(c.x, c.y, 3, 0, Math.PI * 2);
+      this.ctx.fill();
+
+      const midAng = this.arcDirection === 'left'
+        ? startAngle + turnRad / 2
+        : startAngle - turnRad / 2;
+        
+      const lx = c.x + Math.cos(-midAng) * (r + 25);
+      const ly = c.y + Math.sin(-midAng) * (r + 25);
+
+      this.ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
+      this.ctx.fillRect(lx - 55, ly - 18, 110, 32);
+      this.ctx.fillStyle = '#ffaa00';
+      this.ctx.font = 'bold 11px monospace';
+      this.ctx.textAlign = 'center';
+      this.ctx.textBaseline = 'middle';
+      this.ctx.fillText(`R${R} | ${turnAngleDeg.toFixed(1)}°`, lx, ly - 6);
+      this.ctx.fillStyle = '#aaa';
+      this.ctx.font = '10px monospace';
+      this.ctx.fillText(this.arcDirection === 'left' ? '↺ Влево' : '↻ Вправо', lx, ly + 8);
     }
-    
-    this.ctx.setLineDash([]);
-
-    // Подсказка с длиной
-    const dx = this.mousePos.x - this.startPoint.x;
-    const dy = this.mousePos.y - this.startPoint.y;
-    const distance = Math.sqrt(dx * dx + dy * dy);
-    const angle = Math.atan2(dy, dx) * 180 / Math.PI;
-
-    this.ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
-    this.ctx.fillRect(p2.x + 10, p2.y - 30, 120, 40);
-    this.ctx.fillStyle = '#4caf50';
-    this.ctx.font = 'bold 12px monospace';
-    this.ctx.textAlign = 'left';
-    this.ctx.textBaseline = 'top';
-    this.ctx.fillText(`L: ${distance.toFixed(1)} мм`, p2.x + 15, p2.y - 25);
-    this.ctx.fillText(`∠: ${angle.toFixed(1)}°`, p2.x + 15, p2.y - 10);
   }
 
-  private drawInfo(): void {
+  private drawSnapIndicator(): void {
+    if (!this.currentSnap) return;
+    const sp = this.worldToScreen(this.currentSnap.point.x, this.currentSnap.point.y);
+    const s = 8;
+    this.ctx.lineWidth = 2;
+
+    if (this.currentSnap.kind === 'endpoint') {
+      this.ctx.strokeStyle = '#4caf50';
+      this.ctx.strokeRect(sp.x - s, sp.y - s, s * 2, s * 2);
+    } else if (this.currentSnap.kind === 'midpoint') {
+      this.ctx.strokeStyle = '#ff9800';
+      this.ctx.beginPath();
+      this.ctx.moveTo(sp.x, sp.y - s);
+      this.ctx.lineTo(sp.x + s, sp.y + s);
+      this.ctx.lineTo(sp.x - s, sp.y + s);
+      this.ctx.closePath();
+      this.ctx.stroke();
+    }
+  }
+
+  private drawHUD(): void {
     const canvas = this.canvasRef.nativeElement;
-    
-    // Координаты курсора
-    this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    this.ctx.fillRect(10, 10, 200, 25);
+
+    this.ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+    this.ctx.fillRect(10, 10, 220, 50);
     this.ctx.fillStyle = '#4a90d9';
     this.ctx.font = '12px monospace';
     this.ctx.textAlign = 'left';
     this.ctx.textBaseline = 'top';
-    this.ctx.fillText(
-      `X: ${this.mousePos.x.toFixed(1)}  Y: ${this.mousePos.y.toFixed(1)} мм`,
-      15, 15
-    );
+    this.ctx.fillText(`X: ${this.snappedCursor.x.toFixed(1)}  Y: ${this.snappedCursor.y.toFixed(1)}`, 15, 15);
 
-    // Подсказки
-    this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    this.ctx.fillRect(10, canvas.height - 35, 350, 25);
-    this.ctx.fillStyle = '#aaa';
-    this.ctx.fillText(
-      'Alt+ЛКМ/СКМ: панорама | Колесо: зум | Esc: отмена | Shift: точная привязка',
-      15, canvas.height - 30
-    );
+    if (this.currentPoint) {
+      this.ctx.fillStyle = '#4caf50';
+      this.ctx.fillText(`Точка: (${this.currentPoint.x.toFixed(0)}, ${this.currentPoint.y.toFixed(0)})`, 15, 30);
+      this.ctx.fillText(`Касат.: ${this.currentTangent.toFixed(0)}°`, 15, 45);
+    } else {
+      this.ctx.fillStyle = '#ffaa00';
+      this.ctx.fillText('Клик — задать начальную точку', 15, 30);
+    }
+
+    if (this.orthoMode) {
+      this.ctx.fillStyle = 'rgba(76, 175, 80, 0.8)';
+      this.ctx.fillRect(canvas.width - 70, 10, 60, 22);
+      this.ctx.fillStyle = 'white';
+      this.ctx.font = 'bold 12px monospace';
+      this.ctx.textAlign = 'center';
+      this.ctx.fillText('ORTHO', canvas.width - 40, 24);
+    }
   }
 
-  // === ЭКСПОРТ ===
+  setTool(t: 'line' | 'arc'): void {
+    this.tool = t;
+    this.draw();
+  }
+
+  setStartPointHere(): void {
+    this.pushHistory();
+    this.currentPoint = this.findOrCreatePoint(this.snappedCursor);
+    this.currentTangent = 0;
+    this.draw();
+  }
+
+  resetTangent(): void {
+    this.currentTangent = 0;
+    this.draw();
+  }
+
+  clearAll(): void {
+    if (!confirm('Очистить всё?')) return;
+    this.pushHistory();
+    this.points = [];
+    this.segments = [];
+    this.currentPoint = null;
+    this.currentTangent = 0;
+    this.selectedSegment = null;
+    this.nextId = 1;
+    this.draw();
+  }
+
+  resetView(): void {
+    if (this.points.length === 0) {
+      const c = this.canvasRef.nativeElement;
+      this.camera = { x: c.width / 2, y: c.height / 2, zoom: 2 };
+    } else {
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (const p of this.points) {
+        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+        minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+      }
+      const c = this.canvasRef.nativeElement;
+      this.camera.x = c.width / 2 - ((minX + maxX) / 2) * this.camera.zoom;
+      this.camera.y = c.height / 2 + ((minY + maxY) / 2) * this.camera.zoom;
+    }
+    this.draw();
+  }
+
   onSave(): void {
     if (this.segments.length === 0) {
-      alert('Добавьте хотя бы один сегмент траектории');
+      alert('Добавьте хотя бы один сегмент');
       return;
     }
-    
-    // Преобразуем EditorSegment в PathSegment
     const result: PathSegment[] = [];
     for (const seg of this.segments) {
-      const start = this.points.find(p => p.id === seg.startId)!;
-      const end = this.points.find(p => p.id === seg.endId)!;
-
       if (seg.type === 'line') {
-        const dx = end.x - start.x;
-        const dy = end.y - start.y;
-        const length = Math.sqrt(dx * dx + dy * dy);
         result.push({
-          id: seg.id,
-          type: 'line',
-          value: Math.round(length * 100) / 100,
-          angle: 0,
-          direction: 'left'
+          id: seg.id, type: 'line',
+          value: Math.round(this.getSegmentLength(seg) * 100) / 100,
+          angle: 0, direction: 'left'
         });
       } else {
+        const ang = this.getSegmentAngle(seg);
         result.push({
-          id: seg.id,
-          type: 'arc',
-          value: Math.round(seg.radius! * 100) / 100,
-          angle: Math.round(seg.angle! * 100) / 100,
-          direction: seg.direction!
+          id: seg.id, type: 'arc',
+          value: Math.round(seg.radius * 100) / 100,
+          angle: Math.round(ang * 100) / 100,
+          direction: seg.ccw ? 'left' : 'right'
         });
       }
     }
-    
     this.save.emit(result);
   }
 
@@ -700,121 +899,94 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
     this.cancel.emit();
   }
 
-  selectTool(tool: Tool): void {
-    this.currentTool = tool;
-    if (tool !== 'select') {
-      this.selectedSegment = null;
-    }
-    this.draw();
-  }
-
-  clearAll(): void {
-    if (confirm('Удалить всю траекторию?')) {
-      this.points = [];
-      this.segments = [];
-      this.startPoint = null;
-      this.selectedSegment = null;
-      this.nextPointId = 1;
-      this.nextSegId = 1;
-      this.draw();
-    }
-  }
-
-  resetView(): void {
-    if (this.points.length === 0) {
-      const canvas = this.canvasRef.nativeElement;
-      this.camera = { x: canvas.width / 2, y: canvas.height / 2, zoom: 2 };
-    } else {
-      // Центрируем на всех точках
-      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-      for (const p of this.points) {
-        minX = Math.min(minX, p.x);
-        maxX = Math.max(maxX, p.x);
-        minY = Math.min(minY, p.y);
-        maxY = Math.max(maxY, p.y);
-      }
-      const centerX = (minX + maxX) / 2;
-      const centerY = (minY + maxY) / 2;
-      const canvas = this.canvasRef.nativeElement;
-      this.camera.x = canvas.width / 2 - centerX * this.camera.zoom;
-      this.camera.y = canvas.height / 2 + centerY * this.camera.zoom;
-    }
-    this.draw();
-  }
-
-  // Восстановление из сохранённых сегментов
   private reconstructFromSegments(segments: PathSegment[]): void {
     if (segments.length === 0) return;
-
-    let currentX = 0;
-    let currentY = 0;
-    let currentAngle = 0;  // направление движения
-
-    // Первая точка
-    const startPoint: Point = { id: this.nextPointId++, x: currentX, y: currentY };
-    this.points.push(startPoint);
-    let lastPoint = startPoint;
+    let curX = 0, curY = 0, curAng = 0;
+    const p0: Point = { id: this.nextId++, x: 0, y: 0 };
+    this.points.push(p0);
+    let last = p0;
 
     for (const seg of segments) {
-      let endPoint: Point;
-
+      let end: Point;
       if (seg.type === 'line') {
-        const rad = currentAngle;
-        const endX = currentX + Math.cos(rad) * seg.value;
-        const endY = currentY + Math.sin(rad) * seg.value;
-        endPoint = { id: this.nextPointId++, x: endX, y: endY };
-        this.points.push(endPoint);
-        this.segments.push({
-          id: this.nextSegId++,
-          type: 'line',
-          startId: lastPoint.id,
-          endId: endPoint.id
-        });
-        currentX = endX;
-        currentY = endY;
+        const rad = curAng * Math.PI / 180;
+        end = {
+          id: this.nextId++,
+          x: curX + Math.cos(rad) * seg.value,
+          y: curY + Math.sin(rad) * seg.value
+        };
+        this.points.push(end);
+        this.segments.push({ id: this.nextId++, type: 'line', startId: last.id, endId: end.id });
+        curX = end.x; curY = end.y;
+        curAng = curAng; 
       } else {
-        // Дуга - упрощённое восстановление
-        endPoint = { id: this.nextPointId++, x: currentX + seg.value, y: currentY };
-        this.points.push(endPoint);
+        const R = seg.value; 
+        const turnAngleDeg = seg.angle; 
+        const turnRad = turnAngleDeg * Math.PI / 180;
+        const arcLen = R * turnRad;
         
-        const chordLength = seg.value;
-        const radius = Math.max(this.defaultArcRadius, chordLength * 0.6);
-        const midX = (currentX + endPoint.x) / 2;
-        const midY = (currentY + endPoint.y) / 2;
+        const ccw = seg.direction === 'left';
+        const dir = ccw ? 1 : -1;
+        const tangentRad = curAng * Math.PI / 180;
+
+        const normalRad = tangentRad + dir * (Math.PI / 2);
+        const centerX = curX + R * Math.cos(normalRad);
+        const centerY = curY + R * Math.sin(normalRad);
+
+        const startAngle = normalRad + Math.PI;
+        const endAngle = startAngle + dir * turnRad;
+
+        const endX = centerX + R * Math.cos(endAngle);
+        const endY = centerY + R * Math.sin(endAngle);
+        
+        end = { id: this.nextId++, x: endX, y: endY };
+        this.points.push(end);
         
         this.segments.push({
-          id: this.nextSegId++,
+          id: this.nextId++, 
           type: 'arc',
-          startId: lastPoint.id,
-          endId: endPoint.id,
-          radius: radius,
-          angle: seg.angle,
-          direction: seg.direction,
-          center: { x: midX, y: midY + radius }
+          startId: last.id, 
+          endId: end.id,
+          center: { x: centerX, y: centerY }, 
+          radius: R,
+          startAngle, 
+          endAngle,
+          sweepAngle: turnAngleDeg,  
+          arcLength: arcLen,         
+          ccw
         });
-        currentX = endPoint.x;
-        currentY = endPoint.y;
+        
+        curX = endX; curY = endY;
+        curAng = curAng + dir * turnAngleDeg;
+        while (curAng < 0) curAng += 360;
+        while (curAng >= 360) curAng -= 360;
       }
-
-      lastPoint = endPoint;
+      last = end;
     }
   }
 
   get totalPathLength(): number {
-    let total = 0;
+    let t = 0;
     for (const seg of this.segments) {
       if (seg.type === 'line') {
-        const start = this.points.find(p => p.id === seg.startId)!;
-        const end = this.points.find(p => p.id === seg.endId)!;
-        if (start && end) {
-          const dx = end.x - start.x;
-          const dy = end.y - start.y;
-          total += Math.sqrt(dx * dx + dy * dy);
-        }
-      } else if (seg.radius && seg.angle) {
-        total += (seg.angle / 360) * 2 * Math.PI * seg.radius;
+        const s = this.points.find(p => p.id === seg.startId)!;
+        const e = this.points.find(p => p.id === seg.endId)!;
+        t += Math.hypot(e.x - s.x, e.y - s.y);
+      } else {
+        t += seg.arcLength;
       }
     }
-    return total;
+    return t;
+  }
+
+  get commandPrompt(): string {
+    if (!this.currentPoint) {
+      return `Кликните на холст, чтобы задать начальную точку траектории`;
+    }
+    if (this.tool === 'line') {
+      return `ЛИНИЯ: кликните на холст для создания отрезка к мыши`;
+    } else {
+      return `ДУГА: кликните на холст для создания касательной дуги`;
+    }
   }
 }

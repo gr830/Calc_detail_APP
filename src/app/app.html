@@ -178,8 +178,13 @@
           <div class="step">
             <span class="step-number">3</span>
             <div class="step-content">
-              <strong>L p.x:</strong>
-              <p>{{ result.passesAcross }} × {{ params.length }} × {{ params.depthPasses }} = {{ result.totalLength }} мм</p>
+              <strong>Общий путь (L p.x):</strong>
+              <p *ngIf="params.inputMode === 'rectangle'">
+                {{ result.passesAcross }} проходов × {{ params.length }} мм (длина) × {{ params.depthPasses }} в глубину = {{ result.totalLength }} мм
+              </p>
+              <p *ngIf="params.inputMode === 'path'">
+                {{ result.passesAcross }} проходов × {{ params.length }} мм (длина траектории) × {{ params.depthPasses }} в глубину = {{ result.totalLength }} мм
+              </p>
             </div>
           </div>
           <div class="step">

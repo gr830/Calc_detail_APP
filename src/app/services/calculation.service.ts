@@ -5,30 +5,31 @@ import { CalculationParams, CalculationResult, PathSegment } from '../models/cal
 export class CalculationService {
 
   calculate(params: CalculationParams): CalculationResult {
-    // Шаг фрезы (режущая часть)
+    // 1. Шаг фрезы (режущая часть)
     const stepOver = params.cutterDiameter * (params.stepOverPercent / 100);
     const passesAcross = Math.ceil(params.width / stepOver);
 
-    // Длина пути в зависимости от режима
+    // 2. Длина пути в зависимости от режима (Прямоугольник или Траектория)
     let pathLength: number;
     if (params.inputMode === 'rectangle') {
       pathLength = params.length;
     } else {
+      // Если выбрана траектория, динамически высчитываем её длину
       pathLength = this.calculatePathLength(params.pathSegments);
     }
 
-    // Общая длина обработки L p.x
+    // 3. Общая длина обработки L p.x (с округлением до десятков)
     const rawLength = passesAcross * pathLength * params.depthPasses;
     const totalLength = Math.ceil(rawLength / 10) * 10;
 
-    // Подача
+    // 4. Минутная подача
     const feedPerRevolution = params.feedPerTooth * params.numberOfTeeth;
     const feedRate = params.spindleSpeed * feedPerRevolution;
 
-    // Время оперативное (сырое)
+    // 5. Оперативное время (сырое, с защитой от деления на 0)
     const rawOperationalTime = feedRate > 0 ? totalLength / feedRate : 0;
 
-    // Округление по типу производства
+    // 6. Округление по типу производства
     const roundingStep = params.isMassProduction ? 0.1 : 0.05;
     const operationalTime = Math.ceil(rawOperationalTime / roundingStep) * roundingStep;
 
@@ -47,12 +48,13 @@ export class CalculationService {
     };
   }
 
+  // Вспомогательный метод для расчета суммарной длины траектории
   calculatePathLength(segments: PathSegment[]): number {
     return segments.reduce((total, seg) => {
       if (seg.type === 'line') {
         return total + seg.value;
       } else {
-        // Длина дуги = (угол / 360) × 2πR
+        // Длина дуги = (Угол / 360) × 2πR
         const arcLength = (seg.angle / 360) * 2 * Math.PI * seg.value;
         return total + arcLength;
       }

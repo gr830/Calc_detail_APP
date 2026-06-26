@@ -5,139 +5,232 @@
       <span class="info">Ширина: {{ width }} мм</span>
       <span class="info total-length">Длина: {{ totalPathLength | number:'1.2-2' }} мм</span>
       <span class="info">Сегментов: {{ segments.length }}</span>
+      
+      <!-- Дублирующая кнопка в хедере -->
+      <button class="btn-save-header" (click)="onSave()" [disabled]="segments.length === 0">
+        ✓ Применить
+      </button>
+      <button class="btn-close" (click)="onCancel()">✕</button>
     </div>
   </div>
 
   <div class="modal-body">
-    <!-- Левая панель инструментов -->
     <aside class="toolbar">
-      
-      <!-- Инструменты -->
+
+      <!-- ИНСТРУМЕНТ -->
       <div class="tool-section">
-        <h3>🛠 Инструменты</h3>
-        <div class="tool-buttons">
-          <button 
-            [class.active]="currentTool === 'line'"
-            (click)="selectTool('line')"
-            title="Линия (L)">
-            <span class="tool-icon">📏</span>
-            <span class="tool-name">Линия</span>
+        <h3>🛠 Инструмент</h3>
+        <div class="tool-tabs">
+          <button [class.active]="tool === 'line'" (click)="setTool('line')">
+            📏 Линия
           </button>
-          <button 
-            [class.active]="currentTool === 'arc'"
-            (click)="selectTool('arc')"
-            title="Дуга (A)">
-            <span class="tool-icon">🔄</span>
-            <span class="tool-name">Дуга</span>
-          </button>
-          <button 
-            [class.active]="currentTool === 'select'"
-            (click)="selectTool('select')"
-            title="Выбор (V)">
-            <span class="tool-icon">👆</span>
-            <span class="tool-name">Выбор</span>
-          </button>
-          <button 
-            [class.active]="currentTool === 'delete'"
-            (click)="selectTool('delete')"
-            title="Удалить (D)">
-            <span class="tool-icon">🗑</span>
-            <span class="tool-name">Удалить</span>
+          <button [class.active]="tool === 'arc'" (click)="setTool('arc')">
+            ⭕ Дуга
           </button>
         </div>
       </div>
 
-      <!-- Настройки -->
-      <div class="tool-section">
-        <h3>⚙️ Настройки</h3>
+      <!-- ПАРАМЕТРЫ ЛИНИИ -->
+      <div class="tool-section params-section" *ngIf="tool === 'line'">
+        <h3>📏 Параметры отрезка</h3>
+        <div class="form-row">
+          <label>Длина (мм)</label>
+          <input type="number" [(ngModel)]="lineLength" min="0.1" step="1">
+        </div>
+        <div class="form-row">
+          <label>Угол (°)</label>
+          <input type="number" [(ngModel)]="lineAngle" step="1">
+        </div>
+        <div class="quick-angles">
+          <button (click)="lineAngle = 0">0°</button>
+          <button (click)="lineAngle = 45">45°</button>
+          <button (click)="lineAngle = 90">90°</button>
+          <button (click)="lineAngle = 135">135°</button>
+          <button (click)="lineAngle = 180">180°</button>
+          <button (click)="lineAngle = 225">225°</button>
+          <button (click)="lineAngle = 270">270°</button>
+          <button (click)="lineAngle = 315">315°</button>
+        </div>
+        <button class="btn-create" (click)="createSegmentFromParams()" [disabled]="!currentPoint">
+          ✓ Создать отрезок
+        </button>
+
+        <div class="hint-box" *ngIf="currentPoint && tool === 'line'">
+          <small>💡 Preview показан на холсте. Нажмите кнопку для создания.</small>
+        </div>
+      </div>
+
+      <!-- ПАРАМЕТРЫ ДУГИ (ОБНОВЛЕННЫЕ) -->
+      <div class="tool-section params-section" *ngIf="tool === 'arc'">
+        <h3>⭕ Параметры дуги</h3>
         
-        <label class="checkbox-row">
-          <input type="checkbox" [(ngModel)]="snapToAngle">
-          <span>Привязка к углам (0°, 45°, 90°)</span>
-        </label>
+        <div class="arc-explanation">
+          <small>💡 Касательная дуга (G1). Выберите, как ее задать:</small>
+        </div>
+
+        <!-- Переключатель режима: Угол или Длина -->
+        <div class="tool-tabs" style="margin-bottom: 10px;">
+          <button [class.active]="arcMode === 'angle'" (click)="arcMode = 'angle'">∠ По углу</button>
+          <button [class.active]="arcMode === 'length'" (click)="arcMode = 'length'">📏 По длине</button>
+        </div>
 
         <div class="form-row">
-          <label>Радиус дуги (мм)</label>
-          <input type="number" [(ngModel)]="defaultArcRadius" min="5">
+          <label>⭕ Радиус (мм)</label>
+          <input type="number" [(ngModel)]="arcRadius" min="0.1" step="1">
         </div>
 
-        <div class="snap-info">
-          <small>Shift — точная привязка</small>
+        <!-- Показываем, если выбран режим УГЛА -->
+        <ng-container *ngIf="arcMode === 'angle'">
+          <div class="form-row">
+            <label>🔄 Угол поворота (°)</label>
+            <input type="number" [(ngModel)]="arcAngle" min="0.1" step="1">
+          </div>
+          <div class="quick-angles">
+            <button (click)="arcAngle = 30">30°</button>
+            <button (click)="arcAngle = 45">45°</button>
+            <button (click)="arcAngle = 90">90°</button>
+            <button (click)="arcAngle = 180">180°</button>
+          </div>
+        </ng-container>
+
+        <!-- Показываем, если выбран режим ДЛИНЫ -->
+        <ng-container *ngIf="arcMode === 'length'">
+          <div class="form-row">
+            <label>📏 Длина дуги (мм)</label>
+            <input type="number" [(ngModel)]="arcArcLength" min="0.1" step="1">
+          </div>
+          <div class="hint-box arc">
+            <small>Угол: {{ (arcArcLength / arcRadius * 180 / 3.14159) | number:'1.1-1' }}°</small>
+          </div>
+        </ng-container>
+
+        <div class="form-row" style="margin-top: 10px;">
+          <label>↔️ Направление (от текущей)</label>
+          <div class="direction-buttons">
+            <button [class.active]="arcDirection === 'left'" (click)="arcDirection = 'left'">↺ Влево</button>
+            <button [class.active]="arcDirection === 'right'" (click)="arcDirection = 'right'">↻ Вправо</button>
+          </div>
+        </div>
+
+        <button class="btn-create arc" (click)="createSegmentFromParams()" [disabled]="!currentPoint">
+          ✓ Создать дугу
+        </button>
+
+        <div class="hint-box arc" *ngIf="currentPoint && tool === 'arc'">
+          <small>💡 Preview на холсте. Дуга продолжит цепочку от касательной.</small>
         </div>
       </div>
-
-      <!-- Информация о выбранном -->
-      <div class="tool-section" *ngIf="selectedSegment">
-        <h3>📋 Выбранный элемент</h3>
-        <div class="selected-info">
-          <div class="info-row">
-            <span>Тип:</span>
-            <strong>{{ selectedSegment.type === 'line' ? 'Линия' : 'Дуга' }}</strong>
+      
+      <!-- СТАТУС -->
+      <div class="tool-section">
+        <h3>📍 Текущая точка</h3>
+        <div class="status-info" *ngIf="currentPoint; else noPoint">
+          <div class="status-row">
+            <span>Координаты:</span>
+            <strong>({{ currentPoint.x.toFixed(1) }}, {{ currentPoint.y.toFixed(1) }})</strong>
           </div>
-          <div class="info-row" *ngIf="selectedSegment.type === 'arc'">
-            <span>Радиус:</span>
-            <strong>{{ selectedSegment.radius?.toFixed(1) }} мм</strong>
+          <div class="status-row">
+            <span>Касательная:</span>
+            <strong>{{ currentTangent.toFixed(1) }}°</strong>
           </div>
-          <div class="info-row" *ngIf="selectedSegment.type === 'arc'">
-            <span>Угол:</span>
-            <strong>{{ selectedSegment.angle?.toFixed(1) }}°</strong>
+          <div class="status-actions">
+            <button class="btn-small" (click)="resetTangent()">↺ Сбросить касательную (0°)</button>
+            <button class="btn-small danger" (click)="cancelDrawing()">✕ Завершить цепочку</button>
           </div>
-          <button class="btn-delete-selected" (click)="deleteSegment(selectedSegment.id)">
-            🗑 Удалить
+        </div>
+        <ng-template #noPoint>
+          <div class="status-empty">
+            Кликните на холст для задания начальной точки
+          </div>
+          <button class="btn-small" (click)="setStartPointHere()">
+            📍 Задать точку здесь
           </button>
-        </div>
+        </ng-template>
       </div>
 
-      <!-- Управление -->
-      <div class="tool-section">
-        <h3>🎮 Управление</h3>
-        <div class="help-list">
-          <div><kbd>ЛКМ</kbd> — ставить точки</div>
-          <div><kbd>Alt+ЛКМ</kbd> — двигать холст</div>
-          <div><kbd>Колесо</kbd> — масштаб</div>
-          <div><kbd>Shift</kbd> — точная привязка</div>
-          <div><kbd>Esc</kbd> — отменить</div>
-          <div><kbd>Delete</kbd> — удалить выбранное</div>
+      <!-- СПИСОК СЕГМЕНТОВ -->
+      <div class="tool-section" *ngIf="segments.length > 0">
+        <h3>📋 Траектория ({{ segments.length }})</h3>
+        <div class="segment-list">
+          <div *ngFor="let seg of segments; let i = index"
+               class="segment-item"
+               [class.selected]="selectedSegment?.id === seg.id"
+               (click)="selectSegmentFromList(seg)">
+            <div class="seg-info">
+              <span class="seg-icon">{{ seg.type === 'line' ? '📏' : '⭕' }}</span>
+              <div>
+                <div class="seg-name">#{{ i + 1 }} {{ seg.type === 'line' ? 'Линия' : 'Дуга' }}</div>
+                <div class="seg-details">
+                  <span *ngIf="seg.type === 'line'">
+                    L={{ getSegmentLength(seg) | number:'1.1-1' }}мм ∠{{ getSegmentAngle(seg) | number:'1.0-0' }}°
+                  </span>
+                  <span *ngIf="seg.type === 'arc'">
+                    R={{ seg.radius | number:'1.1-1' }}мм ∠{{ getSegmentAngle(seg) | number:'1.0-0' }}° (L={{ getSegmentLength(seg) | number:'1.1-1' }})
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
+        <button class="btn-small danger" (click)="deleteSelected()" [disabled]="!selectedSegment">
+          🗑 Удалить выбранное
+        </button>
       </div>
 
-      <!-- Действия -->
+      <!-- НАСТРОЙКИ -->
       <div class="tool-section">
-        <button class="btn-action" (click)="resetView()">
-          🎯 Центрировать вид
+        <h3>⚙️ Режимы</h3>
+        <label class="checkbox-row">
+          <input type="checkbox" [(ngModel)]="orthoMode">
+          <span>📐 Ortho (F8)</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" [(ngModel)]="snapEndpoint">
+          <span>🟩 Привязка к точкам</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" [(ngModel)]="snapMidpoint">
+          <span>🔺 Привязка к середине</span>
+        </label>
+      </div>
+
+      <!-- ДЕЙСТВИЯ -->
+      <div class="tool-section">
+        <!-- НОВАЯ КНОПКА СОХРАНЕНИЯ -->
+        <button class="btn-save-path" (click)="onSave()" [disabled]="segments.length === 0">
+          ✅ Добавить в расчет
         </button>
-        <button class="btn-action danger" (click)="clearAll()">
-          🗑 Очистить всё
-        </button>
+        
+        <button class="btn-action" (click)="undo()">↶ Отменить (Ctrl+Z)</button>
+        <button class="btn-action" (click)="resetView()">🎯 Центрировать</button>
+        <button class="btn-action danger" (click)="clearAll()">🗑 Очистить всё</button>
       </div>
 
     </aside>
 
-    <!-- Основная область рисования -->
     <main class="canvas-area">
-      <canvas 
-        #editorCanvas
-        (mousedown)="onMouseDown($event)"
-        (mousemove)="onMouseMove($event)"
-        (mouseup)="onMouseUp($event)"
-        (wheel)="onWheel($event)"
-        (contextmenu)="$event.preventDefault()">
+      <canvas #editorCanvas
+              (mousedown)="onMouseDown($event)"
+              (mousemove)="onMouseMove($event)"
+              (mouseup)="onMouseUp($event)"
+              (wheel)="onWheel($event)"
+              (contextmenu)="onContextMenu($event)">
       </canvas>
-      
-      <!-- Индикатор текущего инструмента -->
-      <div class="tool-indicator">
-        <span class="tool-icon-big">
-          {{ currentTool === 'line' ? '📏' : currentTool === 'arc' ? '🔄' : currentTool === 'select' ? '👆' : '🗑' }}
-        </span>
-        <span>{{ currentTool === 'line' ? 'Рисование линии' : currentTool === 'arc' ? 'Рисование дуги' : currentTool === 'select' ? 'Выбор' : 'Удаление' }}</span>
-      </div>
     </main>
   </div>
 
-  <div class="modal-footer">
-    <button class="btn-cancel" (click)="onCancel()">Отмена</button>
-    <button class="btn-save" (click)="onSave()" [disabled]="segments.length === 0">
-      💾 Сохранить траекторию
-    </button>
+  <!-- КОМАНДНАЯ СТРОКА -->
+  <div class="command-line">
+    <div class="cmd-main">
+      <span class="cmd-label">💬</span>
+      <span class="cmd-prompt">{{ commandPrompt }}</span>
+    </div>
+    <div class="cmd-coords">
+      <span>X: {{ snappedCursor.x | number:'1.1-1' }}</span>
+      <span>Y: {{ snappedCursor.y | number:'1.1-1' }}</span>
+      <span *ngIf="currentSnap" class="snap-type">
+        [{{ currentSnap.kind === 'endpoint' ? 'КОНЕЦ' : 'СЕРЕДИНА' }}]
+      </span>
+    </div>
   </div>
 </div>
