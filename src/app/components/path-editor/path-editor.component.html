@@ -63,69 +63,135 @@
       <div class="tool-section params-section" *ngIf="tool === 'arc'">
         <h3>⭕ Параметры дуги</h3>
         
-        <div class="arc-explanation">
-          <small>💡 Касательная дуга (G1). Выберите, как ее задать:</small>
+        <!-- Выбор метода рисования: Касательная (G1) или По 3 точкам (NX) -->
+        <div class="tool-tabs" style="margin-bottom: 12px;">
+          <button [class.active]="arcMethod === 'tangent'" (click)="setArcMethod('tangent')">📐 Касательная (G1)</button>
+          <button [class.active]="arcMethod === '3point'" (click)="setArcMethod('3point')">⭕ По 3 точкам (NX)</button>
         </div>
 
-        <div class="tool-tabs" style="margin-bottom: 10px;">
-          <button [class.active]="arcMode === 'angle'" (click)="arcMode = 'angle'">∠ По углу</button>
-          <button [class.active]="arcMode === 'length'" (click)="arcMode = 'length'">📏 По длине</button>
-        </div>
-
-        <div class="form-row">
-          <label>⭕ Радиус (мм)</label>
-          <div class="input-with-lock">
-            <input type="number" [(ngModel)]="arcRadius" (input)="onManualInput('arcRadius')" min="0.1" step="1">
-            <button class="btn-lock" [class.locked]="lockArcRadius" (click)="lockArcRadius = !lockArcRadius" title="Заблокировать значение">
-              {{ lockArcRadius ? '🔒' : '🔓' }}
-            </button>
+        <!-- ДЛЯ КАСАТЕЛЬНОЙ ДУГИ -->
+        <ng-container *ngIf="arcMethod === 'tangent'">
+          <div class="tool-tabs" style="margin-bottom: 10px;">
+            <button [class.active]="arcMode === 'angle'" (click)="arcMode = 'angle'">∠ По углу</button>
+            <button [class.active]="arcMode === 'length'" (click)="arcMode = 'length'">📏 По длине</button>
           </div>
-        </div>
 
-        <ng-container *ngIf="arcMode === 'angle'">
           <div class="form-row">
-            <label>🔄 Угол поворота (°)</label>
+            <label>⭕ Радиус (мм)</label>
             <div class="input-with-lock">
-              <input type="number" [(ngModel)]="arcAngle" (input)="onManualInput('arcAngle')" min="0.1" step="1">
-              <button class="btn-lock" [class.locked]="lockArcAngle" (click)="lockArcAngle = !lockArcAngle" title="Заблокировать значение">
-                {{ lockArcAngle ? '🔒' : '🔓' }}
+              <input type="number" [(ngModel)]="arcRadius" (input)="onManualInput('arcRadius')" min="0.1" step="1">
+              <button class="btn-lock" [class.locked]="lockArcRadius" (click)="lockArcRadius = !lockArcRadius" title="Заблокировать радиус">
+                {{ lockArcRadius ? '🔒' : '🔓' }}
               </button>
             </div>
           </div>
-        </ng-container>
 
-        <ng-container *ngIf="arcMode === 'length'">
-          <div class="form-row">
-            <label>📏 Длина дуги (мм)</label>
+          <ng-container *ngIf="arcMode === 'angle'">
+            <div class="form-row">
+              <label>🔄 Угол поворота (°)</label>
+              <div class="input-with-lock">
+                <input type="number" [(ngModel)]="arcAngle" (input)="onManualInput('arcAngle')" min="0.1" step="1">
+                <button class="btn-lock" [class.locked]="lockArcAngle" (click)="lockArcAngle = !lockArcAngle" title="Заблокировать угол">
+                  {{ lockArcAngle ? '🔒' : '🔓' }}
+                </button>
+              </div>
+            </div>
+          </ng-container>
+
+          <ng-container *ngIf="arcMode === 'length'">
+            <div class="form-row">
+              <label>📏 Длина дуги (мм)</label>
+              <div class="input-with-lock">
+                <input type="number" [(ngModel)]="arcArcLength" (input)="onManualInput('arcAngle')" min="0.1" step="1">
+                <button class="btn-lock" [class.locked]="lockArcAngle" (click)="lockArcAngle = !lockArcAngle" title="Заблокировать длину">
+                  {{ lockArcAngle ? '🔒' : '🔓' }}
+                </button>
+              </div>
+            </div>
+          </ng-container>
+
+          <div class="form-row" style="margin-top: 10px;">
+            <label>↔️ Направление (от текущей)</label>
             <div class="input-with-lock">
-              <input type="number" [(ngModel)]="arcArcLength" (input)="onManualInput('arcAngle')" min="0.1" step="1">
-              <button class="btn-lock" [class.locked]="lockArcAngle" (click)="lockArcAngle = !lockArcAngle" title="Заблокировать значение">
-                {{ lockArcAngle ? '🔒' : '🔓' }}
+              <div class="direction-buttons" style="flex: 1;">
+                <button [class.active]="arcDirection === 'left'" (click)="setDirection('left')">↺ Влево</button>
+                <button [class.active]="arcDirection === 'right'" (click)="setDirection('right')">↻ Вправо</button>
+              </div>
+              <button class="btn-lock" [class.locked]="lockArcDirection" (click)="lockArcDirection = !lockArcDirection" title="Заблокировать направление">
+                {{ lockArcDirection ? '🔒' : '🔓' }}
               </button>
             </div>
           </div>
+
+          <button class="btn-create arc" (click)="createSegmentFromParams()" [disabled]="!currentPoint">
+            ✓ Создать дугу (Enter)
+          </button>
         </ng-container>
 
-        <div class="form-row" style="margin-top: 10px;">
-          <label>↔️ Направление (от текущей)</label>
-          <div class="direction-buttons">
-            <button [class.active]="arcDirection === 'left'" (click)="setDirection('left')">
-              <span *ngIf="lockArcDirection && arcDirection === 'left'">🔒</span> ↺ Влево
-            </button>
-            <button [class.active]="arcDirection === 'right'" (click)="setDirection('right')">
-              <span *ngIf="lockArcDirection && arcDirection === 'right'">🔒</span> ↻ Вправо
-            </button>
+        <!-- ДЛЯ МЕТОДА NX (ПО 3 ТОЧКАМ) -->
+        <ng-container *ngIf="arcMethod === '3point'">
+          <!-- Информационная плашка -->
+          <div class="arc-explanation" style="background: rgba(255, 170, 0, 0.1); border-left: 3px solid #ffaa00; padding: 10px; border-radius: 4px; margin-bottom: 12px;">
+            <p style="color: #ffaa00; font-size: 12px; margin-bottom: 5px; font-weight: bold;">
+              {{ arc3PointStage === 'endPoint' ? 'Шаг 1: Настройка хорды дуги (End Point)' : 'Шаг 2: Настройка выгиба (Radius)' }}
+            </p>
+            <small *ngIf="arc3PointStage === 'endPoint'" style="color: #aaa;">
+              Настройте длину/угол хорды или кликните по холсту.
+            </small>
+            <small *ngIf="arc3PointStage === 'radius'" style="color: #aaa;">
+              Тяните мышь для настройки радиуса или введите точное число.
+            </small>
           </div>
-        </div>
 
-        <button class="btn-create arc" (click)="createSegmentFromParams()" [disabled]="!currentPoint">
-          ✓ Создать дугу (Enter)
-        </button>
+          <!-- Настройки ШАГА 1 (Конечная точка / Хорда) -->
+          <ng-container *ngIf="arc3PointStage === 'endPoint'">
+            <div class="form-row">
+              <label>📏 Длина хорды (мм)</label>
+              <div class="input-with-lock">
+                <input type="number" [(ngModel)]="arcChordLength" (input)="onManualInput('arcChordLength')" min="0.1" step="1">
+                <button class="btn-lock" [class.locked]="lockArcChordLength" (click)="lockArcChordLength = !lockArcChordLength" title="Заблокировать длину хорды">
+                  {{ lockArcChordLength ? '🔒' : '🔓' }}
+                </button>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <label>📐 Угол хорды (°)</label>
+              <div class="input-with-lock">
+                <input type="number" [(ngModel)]="arcChordAngle" (input)="onManualInput('arcChordAngle')" step="1">
+                <button class="btn-lock" [class.locked]="lockArcChordAngle" (click)="lockArcChordAngle = !lockArcChordAngle" title="Заблокировать угол хорды">
+                  {{ lockArcChordAngle ? '🔒' : '🔓' }}
+                </button>
+              </div>
+            </div>
+
+            <!-- Быстрые углы для хорды (CAD привязка) -->
+            <div class="quick-angles">
+              <button (click)="arcChordAngle = 0; lockArcChordAngle = true; draw()">0°</button>
+              <button (click)="arcChordAngle = 45; lockArcChordAngle = true; draw()">45°</button>
+              <button (click)="arcChordAngle = 90; lockArcChordAngle = true; draw()">90°</button>
+              <button (click)="arcChordAngle = 180; lockArcChordAngle = true; draw()">180°</button>
+            </div>
+          </ng-container>
+
+          <!-- Настройки ШАГА 2 (Радиус выгиба) -->
+          <ng-container *ngIf="arc3PointStage === 'radius'">
+            <div class="form-row">
+              <label>⭕ Радиус дуги (мм)</label>
+              <div class="input-with-lock">
+                <input type="number" [(ngModel)]="arcRadius" (input)="onManualInput('arcRadius')" min="0.1" step="1">
+                <button class="btn-lock" [class.locked]="lockArcRadius" (click)="lockArcRadius = !lockArcRadius" title="Заблокировать радиус">
+                  {{ lockArcRadius ? '🔒' : '🔓' }}
+                </button>
+              </div>
+            </div>
+          </ng-container>
+
+          <button class="btn-create arc" (click)="createSegmentFromParams()" [disabled]="!currentPoint">
+            {{ arc3PointStage === 'endPoint' ? '✓ Зафиксировать хорду (Enter)' : '✓ Создать дугу (Enter)' }}
+          </button>
+        </ng-container>
       </div>
-      
-
-      
-      
       
       <!-- СТАТУС -->
       <div class="tool-section">

@@ -72,12 +72,23 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
   arcAngle = 90;  
   arcDirection: 'left' | 'right' = 'left';
 
-  // ЗАМОЧКИ
+  // ПАРАМЕТРЫ ХОРДЫ ДЛЯ 3-ТОЧЕЧНОЙ ДУГИ NX
+  arcChordLength = 100;
+  arcChordAngle = 0;
+
+  // ЗАМОЧКИ (БЛОКИРОВКИ)
   lockLineLength = false;
   lockLineAngle = false;
   lockArcRadius = false;
   lockArcAngle = false;
   lockArcDirection = false;
+  lockArcChordLength = false; 
+  lockArcChordAngle = false;   
+
+  // МЕТОД ПОСТРОЕНИЯ ДУГИ (tangent = Касательная, 3point = По трем точкам NX)
+  arcMethod: 'tangent' | '3point' = 'tangent';
+  arc3PointStage: 'endPoint' | 'radius' = 'endPoint';
+  arcEndPoint: Point | null = null;
 
   selectedSegment: Segment | null = null;
 
@@ -219,58 +230,81 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
         }
         
       } else if (this.tool === 'arc' && dist > 0.1) {
-        const chordAngle = Math.atan2(dy, dx);
-        const tangentRad = this.currentTangent * Math.PI / 180;
-        
-        let alpha = chordAngle - tangentRad;
-        while (alpha > Math.PI) alpha -= 2 * Math.PI;
-        while (alpha <= -Math.PI) alpha += 2 * Math.PI;
+        if (this.arcMethod === 'tangent') {
+          const chordAngle = Math.atan2(dy, dx);
+          const tangentRad = this.currentTangent * Math.PI / 180;
+          
+          let alpha = chordAngle - tangentRad;
+          while (alpha > Math.PI) alpha -= 2 * Math.PI;
+          while (alpha <= -Math.PI) alpha += 2 * Math.PI;
 
-        // Защита от бесконечного радиуса
-        if (Math.abs(alpha) < 0.05 || Math.abs(Math.abs(alpha) - Math.PI) < 0.05) {
-           this.draw();
-           return; 
-        }
+          if (Math.abs(alpha) < 0.05 || Math.abs(Math.abs(alpha) - Math.PI) < 0.05) {
+             this.draw();
+             return; 
+          }
 
-        // КАРТЕЗИАНСКИЙ МАППИНГ: alpha > 0 — это левый поворот (CCW) в декартовой системе Y-up
-        if (!this.lockArcDirection) {
-           this.arcDirection = alpha > 0 ? 'left' : 'right';
-        }
+          if (!this.lockArcDirection) {
+             this.arcDirection = alpha > 0 ? 'left' : 'right';
+          }
 
-        const isLeft = this.arcDirection === 'left';
+          const isLeft = this.arcDirection === 'left';
+          const dir = isLeft ? 1 : -1;
 
-        if (!this.lockArcRadius && !this.lockArcAngle) {
-          const R = Math.abs(dist / (2 * Math.sin(alpha)));
-          if (R < 10000) { 
-            this.arcRadius = Math.round(R * 100) / 100;
-            const sweepRad = 2 * Math.abs(alpha);
+          if (!this.lockArcRadius && !this.lockArcAngle) {
+            const R = Math.abs(dist / (2 * Math.sin(alpha)));
+            if (R < 10000) { 
+              this.arcRadius = Math.round(R * 100) / 100;
+              const sweepRad = 2 * Math.abs(alpha);
+              
+              if (this.arcMode === 'angle') {
+                this.arcAngle = Math.round((sweepRad * 180 / Math.PI) * 100) / 100;
+              } else {
+                this.arcArcLength = Math.round(this.arcRadius * sweepRad * 100) / 100;
+              }
+            }
+          } 
+          else if (this.lockArcRadius && !this.lockArcAngle) {
+            let safeDist = Math.min(dist, this.arcRadius * 2);
+            let sweepRad = 2 * Math.asin(safeDist / (2 * this.arcRadius));
             
+            if ((alpha > 0 && !isLeft) || (alpha < 0 && isLeft)) {
+               sweepRad = 2 * Math.PI - sweepRad;
+            }
+
             if (this.arcMode === 'angle') {
               this.arcAngle = Math.round((sweepRad * 180 / Math.PI) * 100) / 100;
             } else {
               this.arcArcLength = Math.round(this.arcRadius * sweepRad * 100) / 100;
             }
           }
-        } 
-        else if (this.lockArcRadius && !this.lockArcAngle) {
-          let safeDist = Math.min(dist, this.arcRadius * 2);
-          let sweepRad = 2 * Math.asin(safeDist / (2 * this.arcRadius));
-          
-          if ((alpha > 0 && !isLeft) || (alpha < 0 && isLeft)) {
-             sweepRad = 2 * Math.PI - sweepRad;
+          else if (!this.lockArcRadius && this.lockArcAngle) {
+            let sweepRad = this.arcMode === 'angle' ? this.arcAngle * Math.PI / 180 : (this.arcArcLength / this.arcRadius);
+            if (sweepRad > 0) {
+               const R = dist / (2 * Math.sin(sweepRad / 2));
+               this.arcRadius = Math.round(R * 100) / 100;
+            }
           }
-
-          if (this.arcMode === 'angle') {
-            this.arcAngle = Math.round((sweepRad * 180 / Math.PI) * 100) / 100;
-          } else {
-            this.arcArcLength = Math.round(this.arcRadius * sweepRad * 100) / 100;
-          }
-        }
-        else if (!this.lockArcRadius && this.lockArcAngle) {
-          let sweepRad = this.arcMode === 'angle' ? this.arcAngle * Math.PI / 180 : (this.arcArcLength / this.arcRadius);
-          if (sweepRad > 0) {
-             const R = dist / (2 * Math.sin(sweepRad / 2));
-             this.arcRadius = Math.round(R * 100) / 100;
+        } else {
+          // =========================================================
+          // РЕЖИМ 3 ТОЧЕК (NX): Интерактивный расчет хорды и радиуса
+          // =========================================================
+          if (this.arc3PointStage === 'endPoint') {
+            const chordDist = Math.hypot(dx, dy);
+            if (!this.lockArcChordLength) {
+              this.arcChordLength = Math.round(chordDist * 100) / 100;
+            }
+            if (!this.lockArcChordAngle) {
+              let ang = Math.atan2(dy, dx) * 180 / Math.PI;
+              if (ang < 0) ang += 360;
+              this.arcChordAngle = Math.round(ang * 100) / 100;
+            }
+          } else if (this.arc3PointStage === 'radius' && this.arcEndPoint) {
+            if (!this.lockArcRadius) {
+              const circle = this.getCircleFrom3Points(this.currentPoint, this.arcEndPoint, this.snappedCursor);
+              if (circle) {
+                this.arcRadius = Math.round(circle.r * 100) / 100;
+              }
+            }
           }
         }
       }
@@ -347,7 +381,18 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
       this.currentTangent = 0;
       this.draw();
     } else {
-      this.createSegmentFromParams();
+      if (this.tool === 'arc' && this.arcMethod === '3point') {
+        if (this.arc3PointStage === 'endPoint') {
+          this.arcEndPoint = { id: this.nextId++, x: pos.x, y: pos.y };
+          this.arc3PointStage = 'radius';
+          this.draw();
+        } else {
+          this.create3PointArc();
+          this.draw();
+        }
+      } else {
+        this.createSegmentFromParams();
+      }
     }
   }
 
@@ -367,12 +412,27 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
     if (this.tool === 'line') {
       if (this.lineLength < 0.1) return; 
       this.createLineFromCurrentPoint();
+      this.resetLocks();
     } else {
-      if (this.arcRadius < 0.1) return;
-      this.createArcFromCurrentPoint();
+      if (this.arcMethod === 'tangent') {
+        if (this.arcRadius < 0.1) return;
+        this.pushHistory();
+        this.createArcFromCurrentPoint();
+        this.resetLocks();
+      } else {
+        if (this.arc3PointStage === 'endPoint') {
+          const rad = this.arcChordAngle * Math.PI / 180;
+          const targetX = this.currentPoint.x + Math.cos(rad) * this.arcChordLength;
+          const targetY = this.currentPoint.y + Math.sin(rad) * this.arcChordLength;
+
+          this.arcEndPoint = { id: this.nextId++, x: targetX, y: targetY };
+          this.arc3PointStage = 'radius';
+        } else {
+          this.create3PointArc();
+        }
+      }
     }
     
-    this.resetLocks();
     this.draw();
   }
 
@@ -411,7 +471,6 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
     const turnRad = turnAngleDeg * Math.PI / 180;
     const tangentRad = this.currentTangent * Math.PI / 180;
 
-    // ВАЖНЫЙ ФИКС: Лево CCW — это всегда +1 в классической математике!
     const dir = this.arcDirection === 'left' ? 1 : -1; 
 
     const normalRad = tangentRad + dir * (Math.PI / 2);
@@ -446,6 +505,113 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
 
     while (this.currentTangent < 0) this.currentTangent += 360;
     while (this.currentTangent >= 360) this.currentTangent -= 360;
+  }
+
+  // =========================================================
+  // ИСПРАВЛЕННЫЙ ТИП: Изменено на базовый {x, y} для беспроблемной сборки
+  // =========================================================
+  getCircleFrom3Points(A: { x: number; y: number }, B: { x: number; y: number }, C: { x: number; y: number }) {
+    const x1 = A.x, y1 = A.y;
+    const x2 = B.x, y2 = B.y;
+    const x3 = C.x, y3 = C.y;
+
+    const d = 2 * (x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2));
+    if (Math.abs(d) < 0.00001) return null; 
+
+    const ux = ((x1 * x1 + y1 * y1) * (y2 - y3) + (x2 * x2 + y2 * y2) * (y3 - y1) + (x3 * x3 + y3 * y3) * (y1 - y2)) / d;
+    const uy = ((x1 * x1 + y1 * y1) * (x3 - x2) + (x2 * x2 + y2 * y2) * (x1 - x3) + (x3 * x3 + y3 * y3) * (x2 - x1)) / d;
+    const r = Math.hypot(x1 - ux, y1 - uy);
+
+    return { x: ux, y: uy, r };
+  }
+
+  getCircleFromABAndR(A: { x: number; y: number }, B: { x: number; y: number }, R: number, mouse: { x: number; y: number }) {
+    const dx = B.x - A.x;
+    const dy = B.y - A.y;
+    const d = Math.hypot(dx, dy);
+    
+    if (R < d / 2) {
+      R = d / 2 + 0.01; 
+    }
+    
+    const midX = (A.x + B.x) / 2;
+    const midY = (A.y + B.y) / 2;
+    
+    const perpX = -dy / d;
+    const perpY = dx / d;
+    
+    const h = Math.sqrt(R * R - (d / 2) ** 2);
+    
+    const cross = (B.x - A.x) * (mouse.y - A.y) - (B.y - A.y) * (mouse.x - A.x);
+    const side = cross < 0 ? 1 : -1; 
+    
+    const centerX = midX + perpX * h * side;
+    const centerY = midY + perpY * h * side;
+    
+    return { x: centerX, y: centerY, r: R };
+  }
+
+  getCurrent3PointCircle() {
+    if (!this.currentPoint || !this.arcEndPoint) return null;
+    if (this.lockArcRadius) {
+      return this.getCircleFromABAndR(this.currentPoint, this.arcEndPoint, this.arcRadius, this.snappedCursor);
+    } else {
+      return this.getCircleFrom3Points(this.currentPoint, this.arcEndPoint, this.snappedCursor);
+    }
+  }
+
+  create3PointArc(): void {
+    if (!this.currentPoint || !this.arcEndPoint) return;
+    this.pushHistory();
+
+    const circle = this.getCurrent3PointCircle();
+    if (circle) {
+      const startAngle = Math.atan2(this.currentPoint.y - circle.y, this.currentPoint.x - circle.x);
+      const endAngle = Math.atan2(this.arcEndPoint.y - circle.y, this.arcEndPoint.x - circle.x);
+      
+      const cross = (this.arcEndPoint.x - this.currentPoint.x) * (this.snappedCursor.y - this.currentPoint.y) - 
+                    (this.arcEndPoint.y - this.currentPoint.y) * (this.snappedCursor.x - this.currentPoint.x);
+      const ccw = cross < 0;
+
+      let sweep = endAngle - startAngle;
+      if (ccw) {
+        if (sweep < 0) sweep += 2 * Math.PI;
+      } else {
+        if (sweep > 0) sweep -= 2 * Math.PI;
+      }
+      const sweepAngle = Math.abs(sweep) * 180 / Math.PI;
+      const arcLen = circle.r * Math.abs(sweep);
+
+      const endPoint = this.findOrCreatePoint(this.arcEndPoint);
+
+      this.segments.push({
+        id: this.nextId++,
+        type: 'arc',
+        startId: this.currentPoint.id,
+        endId: endPoint.id,
+        center: { x: circle.x, y: circle.y },
+        radius: circle.r,
+        startAngle,
+        endAngle,
+        sweepAngle,
+        arcLength: arcLen,
+        ccw
+      });
+
+      this.currentPoint = endPoint;
+
+      const endRadiusAngle = Math.atan2(endPoint.y - circle.y, endPoint.x - circle.x);
+      this.currentTangent = ccw 
+        ? (endRadiusAngle * 180 / Math.PI + 90) 
+        : (endRadiusAngle * 180 / Math.PI - 90);
+
+      while (this.currentTangent < 0) this.currentTangent += 360;
+      while (this.currentTangent >= 360) this.currentTangent -= 360;
+    }
+
+    this.arcEndPoint = null;
+    this.arc3PointStage = 'endPoint';
+    this.resetLocks();
   }
 
   cancelDrawing(): void {
@@ -530,6 +696,10 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
     this.lockArcRadius = false;
     this.lockArcAngle = false;
     this.lockArcDirection = false;
+    this.lockArcChordLength = false;
+    this.lockArcChordAngle = false;
+    this.arc3PointStage = 'endPoint';
+    this.arcEndPoint = null;
   }
 
   onManualInput(field: string): void {
@@ -537,6 +707,8 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
     if (field === 'lineAngle') this.lockLineAngle = true;
     if (field === 'arcRadius') this.lockArcRadius = true;
     if (field === 'arcAngle') this.lockArcAngle = true;
+    if (field === 'arcChordLength') this.lockArcChordLength = true;
+    if (field === 'arcChordAngle') this.lockArcChordAngle = true;
     this.draw();
   }
 
@@ -546,7 +718,16 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
     this.draw();
   }
 
-  private draw(): void {
+  setArcMethod(method: 'tangent'|'3point'): void {
+    this.arcMethod = method;
+    this.resetLocks();
+    this.draw();
+  }
+
+  // =========================================================
+  // ИСПРАВЛЕН ТИП ДОСТУПА НА PUBLIC ДЛЯ СОВМЕСТИМОСТИ С HTML
+  // =========================================================
+  draw(): void {
     if (!this.ctx || !this.canvasRef) return;
     const canvas = this.canvasRef.nativeElement;
     this.ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -632,7 +813,6 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
         const c = this.worldToScreen(seg.center.x, seg.center.y);
         const r = seg.radius * this.camera.zoom;
 
-        // ВАЖНО: Рисуем дугу, инвертируя углы для Canvas (так как Y идет вниз)
         this.ctx.beginPath();
         this.ctx.arc(c.x, c.y, r, -seg.startAngle, -seg.endAngle, seg.ccw);
         this.ctx.stroke();
@@ -698,7 +878,7 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
     const len = 40;
     const rad = this.currentTangent * Math.PI / 180;
     const ex = p.x + Math.cos(rad) * len;
-    const ey = p.y - Math.sin(rad) * len; // Маппинг Y-flipped для Canvas
+    const ey = p.y - Math.sin(rad) * len; 
 
     this.ctx.strokeStyle = 'rgba(76, 175, 80, 0.6)';
     this.ctx.lineWidth = 1.5;
@@ -759,77 +939,181 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
       this.ctx.fillText(text, midX, midY - 11);
 
     } else {
-      const R = this.arcRadius;
-      let turnAngleDeg = this.arcMode === 'angle' ? this.arcAngle : (this.arcArcLength / R) * (180 / Math.PI);
-      const turnRad = turnAngleDeg * Math.PI / 180;
-      const tangentRad = this.currentTangent * Math.PI / 180;
-      
-      const dir = this.arcDirection === 'left' ? 1 : -1;
-      
-      const normalRad = tangentRad + dir * (Math.PI / 2);
-      const centerX = this.currentPoint.x + R * Math.cos(normalRad);
-      const centerY = this.currentPoint.y + R * Math.sin(normalRad);
-      
-      const startAngle = normalRad + Math.PI;
-      const endAngle = startAngle + dir * turnRad;
-
-      const c = this.worldToScreen(centerX, centerY);
-      const r = R * this.camera.zoom;
-
-      const p1 = this.worldToScreen(this.currentPoint.x, this.currentPoint.y);
-      const endX = centerX + R * Math.cos(endAngle);
-      const endY = centerY + R * Math.sin(endAngle);
-      const p2 = this.worldToScreen(endX, endY);
-      
-      this.ctx.strokeStyle = 'rgba(255, 170, 0, 0.3)';
-      this.ctx.lineWidth = 1;
-      this.ctx.setLineDash([4, 4]);
-      this.ctx.beginPath();
-      this.ctx.moveTo(p1.x, p1.y);
-      this.ctx.lineTo(p2.x, p2.y);
-      this.ctx.stroke();
-      this.ctx.setLineDash([]);
-
-      this.ctx.strokeStyle = 'rgba(255, 170, 0, 0.8)';
-      this.ctx.lineWidth = 2.5;
-      this.ctx.setLineDash([6, 4]);
-      
-      // ВАЖНЫЙ МАППИНГ: Инвертируем углы для Canvas (так как Y в Canvas идет вниз)
-      this.ctx.beginPath();
-      this.ctx.arc(c.x, c.y, r, -startAngle, -endAngle, this.arcDirection === 'left');
-      this.ctx.stroke();
-      this.ctx.setLineDash([]);
-
-      this.ctx.strokeStyle = 'rgba(255, 170, 0, 0.3)';
-      this.ctx.lineWidth = 1;
-      this.ctx.setLineDash([3, 3]);
-      this.ctx.beginPath();
-      this.ctx.moveTo(p1.x, p1.y);
-      this.ctx.lineTo(c.x, c.y);
-      this.ctx.lineTo(p2.x, p2.y);
-      this.ctx.stroke();
-      this.ctx.setLineDash([]);
-
-      this.ctx.fillStyle = 'rgba(255, 170, 0, 0.8)';
-      this.ctx.beginPath();
-      this.ctx.arc(c.x, c.y, 3, 0, Math.PI * 2);
-      this.ctx.fill();
-
-      const midAng = startAngle + dir * (turnRad / 2);
+      if (this.arcMethod === 'tangent') {
+        const R = this.arcRadius;
+        let turnAngleDeg = this.arcMode === 'angle' ? this.arcAngle : (this.arcArcLength / R) * (180 / Math.PI);
+        const turnRad = turnAngleDeg * Math.PI / 180;
+        const tangentRad = this.currentTangent * Math.PI / 180;
         
-      const lx = c.x + Math.cos(-midAng) * (r + 25);
-      const ly = c.y + Math.sin(-midAng) * (r + 25);
+        const dir = this.arcDirection === 'left' ? 1 : -1;
+        
+        const normalRad = tangentRad + dir * (Math.PI / 2);
+        const centerX = this.currentPoint.x + R * Math.cos(normalRad);
+        const centerY = this.currentPoint.y + R * Math.sin(normalRad);
+        
+        const startAngle = normalRad + Math.PI;
+        const endAngle = startAngle + dir * turnRad;
 
-      this.ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
-      this.ctx.fillRect(lx - 55, ly - 18, 110, 32);
-      this.ctx.fillStyle = '#ffaa00';
-      this.ctx.font = 'bold 11px monospace';
-      this.ctx.textAlign = 'center';
-      this.ctx.textBaseline = 'middle';
-      this.ctx.fillText(`R${R} | ${turnAngleDeg.toFixed(1)}°`, lx, ly - 6);
-      this.ctx.fillStyle = '#aaa';
-      this.ctx.font = '10px monospace';
-      this.ctx.fillText(this.arcDirection === 'left' ? '↺ Влево' : '↻ Вправо', lx, ly + 8);
+        const c = this.worldToScreen(centerX, centerY);
+        const r = R * this.camera.zoom;
+
+        const p1 = this.worldToScreen(this.currentPoint.x, this.currentPoint.y);
+        const endX = centerX + R * Math.cos(endAngle);
+        const endY = centerY + R * Math.sin(endAngle);
+        const p2 = this.worldToScreen(endX, endY);
+        
+        this.ctx.strokeStyle = 'rgba(255, 170, 0, 0.3)';
+        this.ctx.lineWidth = 1;
+        this.ctx.setLineDash([4, 4]);
+        this.ctx.beginPath();
+        this.ctx.moveTo(p1.x, p1.y);
+        this.ctx.lineTo(p2.x, p2.y);
+        this.ctx.stroke();
+        this.ctx.setLineDash([]);
+
+        this.ctx.strokeStyle = 'rgba(255, 170, 0, 0.8)';
+        this.ctx.lineWidth = 2.5;
+        this.ctx.setLineDash([6, 4]);
+        
+        this.ctx.beginPath();
+        this.ctx.arc(c.x, c.y, r, startAngle, endAngle, this.arcDirection === 'left');
+        this.ctx.stroke();
+        this.ctx.setLineDash([]);
+
+        this.ctx.strokeStyle = 'rgba(255, 170, 0, 0.3)';
+        this.ctx.lineWidth = 1;
+        this.ctx.setLineDash([3, 3]);
+        this.ctx.beginPath();
+        this.ctx.moveTo(p1.x, p1.y);
+        this.ctx.lineTo(c.x, c.y);
+        this.ctx.lineTo(p2.x, p2.y);
+        this.ctx.stroke();
+        this.ctx.setLineDash([]);
+
+        this.ctx.fillStyle = 'rgba(255, 170, 0, 0.8)';
+        this.ctx.beginPath();
+        this.ctx.arc(c.x, c.y, 3, 0, Math.PI * 2);
+        this.ctx.fill();
+
+        const midAng = startAngle + dir * (turnRad / 2);
+          
+        const lx = c.x + Math.cos(-midAng) * (r + 25);
+        const ly = c.y + Math.sin(-midAng) * (r + 25);
+
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
+        this.ctx.fillRect(lx - 55, ly - 18, 110, 32);
+        this.ctx.fillStyle = '#ffaa00';
+        this.ctx.font = 'bold 11px monospace';
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText(`R${R} | ${turnAngleDeg.toFixed(1)}°`, lx, ly - 6);
+        this.ctx.fillStyle = '#aaa';
+        this.ctx.font = '10px monospace';
+        this.ctx.fillText(this.arcDirection === 'left' ? '↺ Влево' : '↻ Вправо', lx, ly + 8);
+      } else {
+        // =========================================================
+        // ПРЕДПРОСМОТР РЕЖИМА "ПО 3 ТОЧКАМ" NX
+        // =========================================================
+        if (this.arc3PointStage === 'endPoint') {
+          // Рассчитываем координаты конца хорды на основе замков
+          const rad = this.arcChordAngle * Math.PI / 180;
+          const previewEndX = this.currentPoint.x + Math.cos(rad) * this.arcChordLength;
+          const previewEndY = this.currentPoint.y + Math.sin(rad) * this.arcChordLength;
+
+          const p1 = this.worldToScreen(this.currentPoint.x, this.currentPoint.y);
+          const p2 = this.worldToScreen(previewEndX, previewEndY);
+          
+          this.ctx.strokeStyle = 'rgba(255, 170, 0, 0.7)';
+          this.ctx.lineWidth = 1.5;
+          this.ctx.setLineDash([4, 4]);
+          this.ctx.beginPath();
+          this.ctx.moveTo(p1.x, p1.y);
+          this.ctx.lineTo(p2.x, p2.y);
+          this.ctx.stroke();
+          this.ctx.setLineDash([]);
+
+          this.ctx.fillStyle = 'rgba(255, 170, 0, 0.9)';
+          this.ctx.beginPath();
+          this.ctx.arc(p2.x, p2.y, 4, 0, Math.PI * 2);
+          this.ctx.fill();
+
+          // Отрисовываем параметры хорды прямо на векторе
+          const midX = (p1.x + p2.x) / 2;
+          const midY = (p1.y + p2.y) / 2;
+          const text = `${this.arcChordLength.toFixed(1)} мм / ${this.arcChordAngle.toFixed(1)}°`;
+          this.ctx.font = 'bold 11px monospace';
+          const w = this.ctx.measureText(text).width + 8;
+          this.ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+          this.ctx.fillRect(midX - w / 2, midY - 18, w, 16);
+          this.ctx.fillStyle = '#ffaa00';
+          this.ctx.textAlign = 'center';
+          this.ctx.textBaseline = 'middle';
+          this.ctx.fillText(text, midX, midY - 10);
+
+        } else if (this.arc3PointStage === 'radius' && this.arcEndPoint) {
+          const circle = this.getCurrent3PointCircle();
+          if (circle) {
+            const startAngle = Math.atan2(this.currentPoint.y - circle.y, this.currentPoint.x - circle.x);
+            const endAngle = Math.atan2(this.arcEndPoint.y - circle.y, this.arcEndPoint.x - circle.x);
+            
+            const cross = (this.arcEndPoint.x - this.currentPoint.x) * (this.snappedCursor.y - this.currentPoint.y) - 
+                          (this.arcEndPoint.y - this.currentPoint.y) * (this.snappedCursor.x - this.currentPoint.x);
+            const ccw = cross < 0;
+
+            const c = this.worldToScreen(circle.x, circle.y);
+            const r = circle.r * this.camera.zoom;
+
+            this.ctx.strokeStyle = 'rgba(255, 170, 0, 0.8)';
+            this.ctx.lineWidth = 2.5;
+            this.ctx.setLineDash([6, 4]);
+            this.ctx.beginPath();
+            this.ctx.arc(c.x, c.y, r, -startAngle, -endAngle, ccw);
+            this.ctx.stroke();
+            this.ctx.setLineDash([]);
+
+            const p1 = this.worldToScreen(this.currentPoint.x, this.currentPoint.y);
+            const p2 = this.worldToScreen(this.arcEndPoint.x, this.arcEndPoint.y);
+            this.ctx.strokeStyle = 'rgba(255, 170, 0, 0.3)';
+            this.ctx.lineWidth = 1;
+            this.ctx.setLineDash([3, 3]);
+            this.ctx.beginPath();
+            this.ctx.moveTo(p1.x, p1.y);
+            this.ctx.lineTo(c.x, c.y);
+            this.ctx.lineTo(p2.x, p2.y);
+            this.ctx.stroke();
+            this.ctx.setLineDash([]);
+
+            this.ctx.fillStyle = 'rgba(255, 170, 0, 0.8)';
+            this.ctx.beginPath();
+            this.ctx.arc(c.x, c.y, 3, 0, Math.PI * 2);
+            this.ctx.fill();
+
+            let sweep = endAngle - startAngle;
+            if (ccw) {
+              if (sweep < 0) sweep += 2 * Math.PI;
+            } else {
+              if (sweep > 0) sweep -= 2 * Math.PI;
+            }
+            const angleDeg = Math.abs(sweep) * 180 / Math.PI;
+            const dir = ccw ? 1 : -1;
+            const midAng = startAngle + dir * (Math.abs(sweep) / 2);
+
+            const lx = c.x + Math.cos(-midAng) * (r + 25);
+            const ly = c.y + Math.sin(-midAng) * (r + 25);
+
+            this.ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
+            this.ctx.fillRect(lx - 55, ly - 18, 110, 32);
+            this.ctx.fillStyle = '#ffaa00';
+            this.ctx.font = 'bold 11px monospace';
+            this.ctx.textAlign = 'center';
+            this.ctx.textBaseline = 'middle';
+            this.ctx.fillText(`R${circle.r.toFixed(1)} | ${angleDeg.toFixed(1)}°`, lx, ly - 6);
+            this.ctx.fillStyle = '#aaa';
+            this.ctx.font = '10px monospace';
+            this.ctx.fillText(ccw ? '↺ Влево' : '↻ Вправо', lx, ly + 8);
+          }
+        }
+      }
     }
   }
 
@@ -1044,7 +1328,9 @@ export class PathEditorComponent implements OnInit, OnDestroy, AfterViewInit {
     if (this.tool === 'line') {
       return `ЛИНИЯ: Задайте размеры или кликните. (Enter - создать)`;
     } else {
-      return `ДУГА: Настройте Радиус/Угол (🔓/🔒) или кликните.`;
+      return this.arcMethod === 'tangent' 
+        ? `ДУГА: Настройте параметры или кликните.` 
+        : `ДУГА NX: Клик 1 — конечная точка. Клик 2 — выгиб дуги.`;
     }
   }
 }
